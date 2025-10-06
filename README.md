@@ -14,7 +14,7 @@ This project provides a MySQL database (via Docker) and a FastAPI backend with u
 From the repository root (so `SQL/*.sql` are in build context):
 
 ```powershell
-docker build -t fyp-mysql . -d
+docker build -t fyp-mysql .
 ```
 
 Notes:
@@ -29,7 +29,7 @@ From the repository root in Windows PowerShell:
 ```powershell
 cd Backend
 python -m venv .venv
-venv/Scripts/Activate
+. .venv/Scripts/Activate.ps1
 pip install -r requirements.txt
 ```
 
