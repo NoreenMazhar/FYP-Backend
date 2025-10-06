@@ -17,7 +17,7 @@ def _b64url_decode(data: str) -> bytes:
 
 
 def hash_password(password: str) -> str:
-	salt = os.getenv("PASSWORD_SALT", "static-salt-change-me").encode("utf-8")
+	salt = os.getenv("JWT_PASS").encode("utf-8")
 	dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
 	return _b64url_encode(dk)
 
@@ -27,7 +27,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 def create_jwt(payload: Dict[str, Any], expires_in_seconds: int = 3600) -> str:
-	secret = os.getenv("JWT_SECRET", "dev-secret-change-me").encode("utf-8")
+	secret = os.getenv("JWT_SECRET").encode("utf-8")
 	alg = "HS256"
 	header = {"alg": alg, "typ": "JWT"}
 	claims = dict(payload)
@@ -45,7 +45,7 @@ def create_jwt(payload: Dict[str, Any], expires_in_seconds: int = 3600) -> str:
 
 def verify_jwt(token: str) -> Dict[str, Any] | None:
 	try:
-		secret = os.getenv("JWT_SECRET", "dev-secret-change-me").encode("utf-8")
+		secret = os.getenv("JWT_SECRET").encode("utf-8")
 		header_b64, payload_b64, sig_b64 = token.split(".")
 		signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
 		expected_sig = hmac.new(secret, signing_input, hashlib.sha256).digest()
