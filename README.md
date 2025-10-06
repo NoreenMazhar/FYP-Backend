@@ -17,6 +17,10 @@ From the repository root (so `SQL/*.sql` are in build context):
 docker build -t fyp-mysql .
 ```
 
+```powershell
+docker run --name fyp-mysql -e MYSQL_ROOT_PASSWORD=rootpass -e MYSQL_DATABASE=FYP-DB -e MYSQL_USER=FYP-USER -e MYSQL_PASSWORD=FYP-PASS -p 3306:3306 -v fyp_mysql_data:/var/lib/mysql fyp-mysql
+```
+
 Notes:
 
 - All `.sql` files in `SQL/` run automatically on first startup (empty data dir); they run in alphabetical order.
@@ -59,7 +63,7 @@ Tips:
 Start the API (ensure the MySQL container is running and accepting connections):
 
 ```powershell
-uvicorn Backend.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 On startup, the backend ensures a `users` table exists.

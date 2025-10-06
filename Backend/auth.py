@@ -16,9 +16,17 @@ def _b64url_decode(data: str) -> bytes:
 	return base64.urlsafe_b64decode(data + padding)
 
 
+def _get_password_salt_bytes() -> bytes:
+	# Prefer PASSWORD_SALT; fall back to JWT_PASS for backwards compatibility
+	salt = os.getenv("PASSWORD_SALT") or os.getenv("JWT_PASS")
+	if not salt:
+		raise RuntimeError("Missing PASSWORD_SALT (or legacy JWT_PASS) environment variable")
+	return salt.encode("utf-8")
+
+
 def hash_password(password: str) -> str:
-	salt = os.getenv("JWT_PASS").encode("utf-8")
-	dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 100_000)
+	salt_bytes = _get_password_salt_bytes()
+	dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt_bytes, 100_000)
 	return _b64url_encode(dk)
 
 
@@ -27,7 +35,11 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 def create_jwt(payload: Dict[str, Any], expires_in_seconds: int = 3600) -> str:
-	secret = os.getenv("JWT_SECRET").encode("utf-8")
+	secret_env = os.getenv("JWT_SECRET")
+	if not secret_env:
+		raise RuntimeError("Missing JWT_SECRET environment variable")
+	secret = secret_env.encode("utf-8")
+
 	alg = "HS256"
 	header = {"alg": alg, "typ": "JWT"}
 	claims = dict(payload)
@@ -45,7 +57,10 @@ def create_jwt(payload: Dict[str, Any], expires_in_seconds: int = 3600) -> str:
 
 def verify_jwt(token: str) -> Dict[str, Any] | None:
 	try:
-		secret = os.getenv("JWT_SECRET").encode("utf-8")
+		secret_env = os.getenv("JWT_SECRET")
+		if not secret_env:
+			return None
+		secret = secret_env.encode("utf-8")
 		header_b64, payload_b64, sig_b64 = token.split(".")
 		signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
 		expected_sig = hmac.new(secret, signing_input, hashlib.sha256).digest()

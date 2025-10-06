@@ -3,7 +3,16 @@ from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 from db import Database
 from auth import hash_password, verify_password, create_jwt
+from dotenv import load_dotenv
+import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+logger.info("Starting FYP Backend")
+
+
+load_dotenv()
 
 app = FastAPI(title="FYP Backend")
 
@@ -46,11 +55,14 @@ def on_startup():
 @app.post("/auth/register")
 def register(payload: RegisterRequest, db: Database = Depends(get_db)):
 	# check if user exists
+	logger.info(f"Registering user {payload.email}")
 	existing = db.execute("SELECT id FROM users WHERE email=%s", (payload.email,))
 	if existing:
+		logger.info(f"User {payload.email} already exists")
 		raise HTTPException(status_code=409, detail="User already exists")
 
 	password_hash = hash_password(payload.password)
+	logger.info(f"Hashing password for user {payload.email}")
 	db.execute(
 		"INSERT INTO users (email, password_hash, full_name) VALUES (%s, %s, %s)",
 		(payload.email, password_hash, payload.full_name),
