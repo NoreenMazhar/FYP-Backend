@@ -18,5 +18,3 @@ HEALTHCHECK --interval=10s --timeout=5s --retries=10 CMD mysqladmin ping -h 127.
 
 # Use UTF-8 defaults
 CMD ["mysqld", "--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
-
-
