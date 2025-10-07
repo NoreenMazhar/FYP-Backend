@@ -8,9 +8,7 @@ import logging
 import json
 from sql_agent import (
 	configure_gemini_from_env,
-	get_db_schema_text,
-	generate_sql_from_question,
-	summarize_results,
+	run_data_raw_agent,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -102,12 +100,7 @@ def login(payload: LoginRequest, db: Database = Depends(get_db)):
 @app.post("/query")
 def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
 	try:
-		schema_text = get_db_schema_text(db)
-		sql = generate_sql_from_question(payload.query, schema_text)
-		rows = db.execute(sql) or []
-		# rows already dictionaries due to db.execute using dictionary=True
-		summary = summarize_results(payload.query, sql, rows)
-		return {"sql": sql, "rows": rows, "summary": summary}
+		return run_data_raw_agent(db, payload.query)
 	except ValueError as ve:
 		raise HTTPException(status_code=400, detail=str(ve))
 	except Exception as exc:
