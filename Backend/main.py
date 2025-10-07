@@ -5,6 +5,13 @@ from db import Database
 from auth import hash_password, verify_password, create_jwt
 from dotenv import load_dotenv
 import logging
+import json
+from sql_agent import (
+	configure_gemini_from_env,
+	get_db_schema_text,
+	generate_sql_from_question,
+	summarize_results,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,6 +33,10 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
 	email: EmailStr
 	password: str
+
+
+class QueryRequest(BaseModel):
+	query: str
 
 
 def get_db() -> Database:
@@ -50,6 +61,8 @@ def ensure_users_table(db: Database) -> None:
 def on_startup():
 	db = Database.get_instance()
 	ensure_users_table(db)
+	configure_gemini_from_env()
+
 
 
 @app.post("/auth/register")
@@ -84,4 +97,20 @@ def login(payload: LoginRequest, db: Database = Depends(get_db)):
 	token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
 	return {"access_token": token, "token_type": "bearer", "user": {"id": user["id"], "email": user["email"], "full_name": user["full_name"]}}
 
+
+
+@app.post("/query")
+def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
+	try:
+		schema_text = get_db_schema_text(db)
+		sql = generate_sql_from_question(payload.query, schema_text)
+		rows = db.execute(sql) or []
+		# rows already dictionaries due to db.execute using dictionary=True
+		summary = summarize_results(payload.query, sql, rows)
+		return {"sql": sql, "rows": rows, "summary": summary}
+	except ValueError as ve:
+		raise HTTPException(status_code=400, detail=str(ve))
+	except Exception as exc:
+		logger.exception("/query failed")
+		raise HTTPException(status_code=500, detail="Failed to process query") from exc
 

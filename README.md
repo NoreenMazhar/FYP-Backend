@@ -60,6 +60,14 @@ Tips:
 
 ### 4) Run the FastAPI backend
 
+Inserting the excels into the database
+
+_Make sure to give proper path in the main_
+
+```powershell
+python DataInsertion.py
+```
+
 Start the API (ensure the MySQL container is running and accepting connections):
 
 ```powershell
