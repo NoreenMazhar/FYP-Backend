@@ -74,7 +74,7 @@ def run_data_raw_agent(question: str) -> dict:
     configure_gemini_from_env()
     lc_db = get_lc_sql_db()
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
     agent_executor = create_sql_agent(
         llm=llm,
