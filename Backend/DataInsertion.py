@@ -1,4 +1,5 @@
 import os
+import json
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Iterable, List, Tuple
@@ -68,7 +69,7 @@ def build_rows_for_insert(
     dataframe.columns = [str(c) for c in dataframe.columns]
     for idx, row in dataframe.iterrows():
         row_dict = row_to_clean_dict(row)
-        row_json = pd.io.json.dumps(row_dict, ensure_ascii=False)
+        row_json = json.dumps(row_dict, ensure_ascii=False)
         yield (batch_id, source_file, int(idx) + 1, row_json)
 
 
