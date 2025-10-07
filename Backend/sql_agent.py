@@ -1,114 +1,100 @@
 import os
 import json
 import logging
-from typing import List
+from typing import Any
 
 import google.generativeai as genai
+from langchain_community.utilities import SQLDatabase
+from langchain_community.agent_toolkits.sql.base import create_sql_agent
+from langchain.agents.agent_types import AgentType
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 
 logger = logging.getLogger(__name__)
 
 
 def configure_gemini_from_env() -> None:
-	api_key = os.getenv("GOOGLE_API_KEY")
-	if not api_key:
-		logger.warning("GOOGLE_API_KEY is not set; LLM features will be disabled.")
-		return
-	genai.configure(api_key=api_key)
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        logger.warning("GOOGLE_API_KEY is not set; LLM features will be disabled.")
+        return
+    genai.configure(api_key=api_key)
+
+
+def _get_sqlalchemy_url_from_env() -> str:
+    user = os.getenv("DB_USER", os.getenv("MYSQL_USER", "FYP-USER"))
+    password = os.getenv("DB_PASSWORD", os.getenv("MYSQL_PASSWORD", "FYP-PASS"))
+    host = os.getenv("DB_HOST", "localhost")
+    port = os.getenv("DB_PORT", "3306")
+    database = os.getenv("DB_NAME", os.getenv("MYSQL_DATABASE", "FYP-DB"))
+    return f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
+
+
+_LC_DB: SQLDatabase | None = None
+
+
+def get_lc_sql_db() -> SQLDatabase:
+    global _LC_DB
+    if _LC_DB is None:
+        url = _get_sqlalchemy_url_from_env()
+        _LC_DB = SQLDatabase.from_uri(url, include_tables=["data_raw"], sample_rows_in_table_info=2)
+    return _LC_DB
 
 
 def get_data_raw_schema_text() -> str:
-	"""Return a fixed schema description for the data_raw table only."""
-	return (
-		"Table: data_raw\n"
-		"Columns:\n"
-		"- id BIGINT (PK)\n"
-		"- batch_id CHAR(36)\n"
-		"- source_file VARCHAR(512)\n"
-		"- row_index INT (1-based index from original sheet)\n"
-		"- row_data JSON (entire row as JSON object; use JSON_EXTRACT to access fields)\n"
-		"- imported_at TIMESTAMP\n"
-		"- imported_by BIGINT (nullable)\n\n"
-		"Notes: Use MySQL JSON functions, e.g., JSON_EXTRACT(row_data, '$.ColumnName')."
-	)
-
-
-def _extract_sql_from_text(text: str) -> str:
-	start = text.find("```")
-	if start != -1:
-		end = text.find("```", start + 3)
-		if end != -1:
-			code = text[start + 3:end].strip()
-			first_nl = code.find("\n")
-			if first_nl != -1 and code[:first_nl].strip().lower() in {"sql", "mysql"}:
-				code = code[first_nl + 1:]
-			return code.strip().rstrip(";")
-	return text.strip().rstrip(";")
+    return (
+        "Table: data_raw\n"
+        "Columns:\n"
+        "- id BIGINT (PK)\n"
+        "- batch_id CHAR(36)\n"
+        "- source_file VARCHAR(512)\n"
+        "- row_index INT (1-based index from original sheet)\n"
+        "- row_data JSON (entire row as JSON object; use JSON_EXTRACT to access fields)\n"
+        "- imported_at TIMESTAMP\n"
+        "- imported_by BIGINT (nullable)\n\n"
+        "Notes: Use MySQL JSON functions, e.g., JSON_EXTRACT(row_data, '$.ColumnName')."
+    )
 
 
 def _is_safe_select(sql: str) -> bool:
-	upper = sql.strip().upper()
-	if upper.startswith("WITH "):
-		return True
-	return upper.startswith("SELECT ")
-
-
-def _ensure_limit(sql: str, default_limit: int = 100) -> str:
-	upper = sql.upper()
-	if " LIMIT " in upper:
-		return sql
-	return f"{sql} LIMIT {default_limit}"
+    upper = sql.strip().upper()
+    if upper.startswith("WITH "):
+        return True
+    return upper.startswith("SELECT ")
 
 
 def _assert_only_data_raw(sql: str) -> None:
-	lower = sql.lower()
-	if "data_raw" not in lower:
-		raise ValueError("Query must reference only the data_raw table")
+    lower = sql.lower()
+    if "data_raw" not in lower:
+        raise ValueError("Query must reference only the data_raw table")
 
 
+def run_data_raw_agent(question: str) -> dict:
+    """End-to-end: use LangChain SQL Agent (Gemini) to generate, run, and summarize SQL on data_raw."""
+    configure_gemini_from_env()
+    lc_db = get_lc_sql_db()
 
-def generate_sql_from_question(question: str, schema_text: str | None = None) -> str:
-	model = genai.GenerativeModel("gemini-2.5-pro")
-	if not schema_text:
-		schema_text = get_data_raw_schema_text()
-	prompt = (
-		"You are a helpful MySQL SQL generator for a single table named data_raw. "
-		"Write a single safe, read-only SQL query (SELECT only) using only the data_raw table. "
-		"Use MySQL syntax. Prefer JSON_EXTRACT(row_data, '$.Field') to access JSON fields. "
-		"Return only the SQL in a markdown code block. Never modify data.\n\n"
-		f"Schema:\n{schema_text}\n\n"
-		f"Question: {question}\n"
-	)
-	resp = model.generate_content(prompt)
-	text = resp.text or ""
-	sql = _extract_sql_from_text(text)
-	if not _is_safe_select(sql):
-		raise ValueError("Generated SQL is not a SELECT query")
-	_assert_only_data_raw(sql)
-	return _ensure_limit(sql)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
 
+    agent_executor = create_sql_agent(
+        llm=llm,
+        db=lc_db,
+        agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+        verbose=True,
+    )
 
-def summarize_results(question: str, sql: str, rows: list[dict]) -> str:
-	model = genai.GenerativeModel("gemini-1.5-flash")
-	sample = rows[:20]
-	data_preview = json.dumps(sample, ensure_ascii=False)
-	prompt = (
-		"You are a helpful analyst. Answer the user's question using ONLY the provided rows. "
-		"Cite key numbers explicitly. If rows are empty, say there's no data answering the question.\n\n"
-		f"Question: {question}\n"
-		f"SQL: {sql}\n"
-		f"First rows (JSON): {data_preview}\n"
-	)
-	resp = model.generate_content(prompt)
-	return (resp.text or "").strip()
+    result = agent_executor.invoke({"input": question})
+    output_text = result.get("output", "").strip()
 
+    # Extract executed SQL for debugging
+    executed_sql = None
+    for step in result.get("intermediate_steps", []):
+        if isinstance(step, tuple) and "SELECT" in step[0].upper():
+            executed_sql = step[0]
+            break
 
-def run_data_raw_agent(db, question: str) -> dict:
-	"""End-to-end: build SELECT for data_raw, execute, and summarize."""
-	schema_text = get_data_raw_schema_text()
-	sql = generate_sql_from_question(question, schema_text)
-	rows = db.execute(sql) or []
-	summary = summarize_results(question, sql, rows)
-	return {"sql": sql, "rows": rows, "summary": summary}
-
-
+    return {
+        "question": question,
+        "executed_sql": executed_sql,
+        "result": output_text,
+    }

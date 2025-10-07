@@ -100,7 +100,7 @@ def login(payload: LoginRequest, db: Database = Depends(get_db)):
 @app.post("/query")
 def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
 	try:
-		return run_data_raw_agent(db, payload.query)
+		return run_data_raw_agent(payload.query)
 	except ValueError as ve:
 		raise HTTPException(status_code=400, detail=str(ve))
 	except Exception as exc:
