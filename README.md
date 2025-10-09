@@ -96,6 +96,52 @@ curl -X POST http://localhost:8000/auth/login ^
 
 A successful response returns an `access_token` (JWT) and basic user info.
 
+### 6) Query endpoint (LLM-assisted SQL)
+
+Route: `POST /query`
+
+- Purpose: Natural language questions are translated to SQL and executed against the database.
+- Table scope behavior:
+  - If the question is about devices (e.g., mentions "device", "camera", "firmware", "telemetry", etc.), the agent queries only device tables like `devices`, `device_models`, `device_streams`, `device_health`, and related.
+  - Otherwise, it queries only the `data_raw` table and uses MySQL JSON functions for fields inside `row_data`.
+- Output is a structured Markdown answer with sections: Overview, Key Findings, SQL Used, Observations, In-Depth Analysis (when warranted), Next Steps.
+
+Requirements:
+
+- Environment variable `GOOGLE_API_KEY` must be set (Gemini). If not set, LLM features are disabled.
+
+Request body:
+
+```json
+{
+  "query": "Which camera models have the most offline events in the last 7 days?"
+}
+```
+
+Response body (example):
+
+````json
+{
+  "question": "Which camera models have the most offline events in the last 7 days?",
+  "executed_sql": "SELECT ...",
+  "result": "### Overview\n- ... structured answer ...\n### Key Findings\n- ...\n### SQL Used\n```sql\nSELECT ...\n```\n### Observations\n- ...\n### In-Depth Analysis (when requested or warranted)\n- ...\n### Next Steps\n- ...",
+  "used_device_scope": true
+}
+````
+
+Notes:
+
+- `used_device_scope` indicates whether the device schema was used. If `false`, the query was answered from `data_raw`.
+- `executed_sql` may be `null` if the agent didn’t need to run a final SQL statement (rare) or if it couldn’t be extracted.
+
+Example call (PowerShell):
+
+```powershell
+curl -X POST http://localhost:8000/query ^
+  -H "Content-Type: application/json" ^
+  -d '{"query":"List top 5 devices by error events this month"}'
+```
+
 ### Troubleshooting
 
 - If connection fails, confirm the Docker container is running: `docker ps`
