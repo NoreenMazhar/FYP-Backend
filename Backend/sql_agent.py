@@ -30,15 +30,47 @@ def _get_sqlalchemy_url_from_env() -> str:
     return f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
 
 
-_LC_DB: SQLDatabase | None = None
+# Caches for different table scopes
+_LC_DBS: dict[str, SQLDatabase] = {}
+
+# Table scopes
+DATA_RAW_TABLES = ["data_raw"]
+DEVICES_TABLES = [
+    "device_models",
+    "devices",
+    "device_firmware",
+    "device_config_profiles",
+    "device_config_applied",
+    "device_network_interfaces",
+    "device_streams",
+    "device_mounts",
+    "device_health",
+    "device_telemetry",
+    "device_events",
+    "device_permissions",
+    "device_groups",
+    "device_group_members",
+    "device_maintenance",
+    "device_credentials",
+]
 
 
-def get_lc_sql_db() -> SQLDatabase:
-    global _LC_DB
-    if _LC_DB is None:
+def get_lc_sql_db(include_tables: list[str]) -> SQLDatabase:
+    """Get or create a cached SQLDatabase for the given include_tables scope."""
+    global _LC_DBS
+    key = ",".join(sorted(include_tables)) or "__all__"
+    if key not in _LC_DBS:
         url = _get_sqlalchemy_url_from_env()
-        _LC_DB = SQLDatabase.from_uri(url, include_tables=["data_raw"], sample_rows_in_table_info=2)
-    return _LC_DB
+        try:
+            _LC_DBS[key] = SQLDatabase.from_uri(
+                url,
+                include_tables=include_tables,
+                sample_rows_in_table_info=2,
+            )
+        except Exception:
+            # Fallback to no include filter if specific tables are not present
+            _LC_DBS[key] = SQLDatabase.from_uri(url, sample_rows_in_table_info=2)
+    return _LC_DBS[key]
 
 
 def get_data_raw_schema_text() -> str:
@@ -69,12 +101,101 @@ def _assert_only_data_raw(sql: str) -> None:
         raise ValueError("Query must reference only the data_raw table")
 
 
-def run_data_raw_agent(question: str) -> dict:
-    """End-to-end: use LangChain SQL Agent (Gemini) to generate, run, and summarize SQL on data_raw."""
-    configure_gemini_from_env()
-    lc_db = get_lc_sql_db()
+def _is_device_query(question: str) -> bool:
+    """Heuristic to detect device-related queries."""
+    if not question:
+        return False
+    q = question.lower()
+    keywords = [
+        "device",
+        "devices",
+        "camera",
+        "cameras",
+        "firmware",
+        "stream",
+        "streams",
+        "rtsp",
+        "gateway",
+        "nvr",
+        "telemetry",
+        "health",
+        "maintenance",
+        "mount",
+        "network interface",
+        "mac address",
+        "ip address",
+        "event",
+        "events",
+        "model",
+        "models",
+        "group",
+        "groups",
+        "credential",
+        "credentials",
+    ]
+    return any(k in q for k in keywords)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+
+def _build_prompt(question: str, use_device_scope: bool) -> str:
+    """Compose guidance plus the user question to steer the agent."""
+    if use_device_scope:
+        tables_text = ", ".join(DEVICES_TABLES)
+        scope_instruction = (
+            "You must answer by querying ONLY the device tables: "
+            f"{tables_text}. Do not query unrelated tables."
+        )
+        domain_context = (
+            "Schema gist: devices and device_models define inventory; device_streams/firmware/config* "
+            "cover media and configuration; device_health/telemetry/events record status and metrics; "
+            "device_groups and permissions handle organization and access."
+        )
+    else:
+        tables_text = ", ".join(DATA_RAW_TABLES)
+        scope_instruction = (
+            "You must answer by querying ONLY the data lake table: "
+            f"{tables_text}. Access fields via JSON_EXTRACT on row_data."
+        )
+        domain_context = (
+            "Schema gist: data_raw holds imported spreadsheet rows as JSON. Use MySQL JSON functions."
+        )
+
+    formatting = (
+        "Format your final answer in clear Markdown with these sections:\n"
+        "### Overview\n"
+        "- Briefly state the direct answer in plain language.\n"
+        "### Key Findings\n"
+        "- Bullet important numbers, trends, or comparisons.\n"
+        "### SQL Used\n"
+        "```sql\n<your final SQL here>\n```\n"
+        "### Observations\n"
+        "- Short insights or anomalies worth noting.\n"
+        "### Next Steps\n"
+        "- 2-3 concise suggestions for follow-up analysis or checks."
+    )
+
+    guardrails = (
+        "Constraints: Use only read-only SELECTs; avoid DDL/DML. If multiple queries are needed, "
+        "show the final, most important SQL in the SQL Used section. Keep the language simple."
+    )
+
+    return (
+        f"{scope_instruction}\n{domain_context}\n{formatting}\n{guardrails}\n\n"
+        f"User question: {question}"
+    )
+
+
+def run_data_raw_agent(question: str) -> dict:
+    """End-to-end: use LangChain SQL Agent (Gemini) to generate, run, and summarize SQL.
+
+    If the question is device-related, switch to device tables; otherwise use data_raw.
+    """
+    configure_gemini_from_env()
+
+    use_device_scope = _is_device_query(question)
+    include_tables = DEVICES_TABLES if use_device_scope else DATA_RAW_TABLES
+    lc_db = get_lc_sql_db(include_tables)
+
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
 
     agent_executor = create_sql_agent(
         llm=llm,
@@ -83,7 +204,9 @@ def run_data_raw_agent(question: str) -> dict:
         verbose=True,
     )
 
-    result = agent_executor.invoke({"input": question})
+    enhanced_prompt = _build_prompt(question, use_device_scope)
+
+    result = agent_executor.invoke({"input": enhanced_prompt})
     output_text = result.get("output", "").strip()
 
     # Extract executed SQL for debugging
@@ -97,4 +220,5 @@ def run_data_raw_agent(question: str) -> dict:
         "question": question,
         "executed_sql": executed_sql,
         "result": output_text,
+        "used_device_scope": use_device_scope,
     }
