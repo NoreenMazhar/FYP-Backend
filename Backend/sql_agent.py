@@ -169,13 +169,18 @@ def _build_prompt(question: str, use_device_scope: bool) -> str:
         "```sql\n<your final SQL here>\n```\n"
         "### Observations\n"
         "- Short insights or anomalies worth noting.\n"
+        "### In-Depth Analysis (when requested or warranted)\n"
+        "- Provide deeper explanations: distributions, percentiles, moving averages, breakdowns by relevant dimensions (e.g., model, location, status).\n"
+        "- Discuss trends over time, correlations, outliers, and potential causes/effects.\n"
+        "- Include concise calculations (e.g., rates, ratios) and small summary tables if helpful.\n"
         "### Next Steps\n"
         "- 2-3 concise suggestions for follow-up analysis or checks."
     )
 
     guardrails = (
         "Constraints: Use only read-only SELECTs; avoid DDL/DML. If multiple queries are needed, "
-        "show the final, most important SQL in the SQL Used section. Keep the language simple."
+        "show the final, most important SQL in the SQL Used section. Keep the language simple. "
+        "If the user asks for deep or detailed analysis, expand the In-Depth Analysis section accordingly."
     )
 
     return (
