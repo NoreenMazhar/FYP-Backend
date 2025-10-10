@@ -29,15 +29,12 @@ class RegisterRequest(BaseModel):
 	password: str
 	full_name: str | None = None
 
-
 class LoginRequest(BaseModel):
 	email: EmailStr
 	password: str
 
-
 class QueryRequest(BaseModel):
 	query: str
-
 
 class VehicleDetection(BaseModel):
 	timestamp: datetime
@@ -47,7 +44,6 @@ class VehicleDetection(BaseModel):
 	type_score: float
 	license_plate: str
 	ocr_score: float
-
 
 class VehicleDetectionsResponse(BaseModel):
 	detections: List[VehicleDetection]
@@ -78,8 +74,6 @@ def on_startup():
 	ensure_users_table(db)
 	configure_gemini_from_env()
 
-
-
 @app.post("/auth/register")
 def register(payload: RegisterRequest, db: Database = Depends(get_db)):
 	# check if user exists
@@ -100,7 +94,6 @@ def register(payload: RegisterRequest, db: Database = Depends(get_db)):
 	token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
 	return {"access_token": token, "token_type": "bearer", "user": user}
 
-
 @app.post("/auth/login")
 def login(payload: LoginRequest, db: Database = Depends(get_db)):
 	user = db.execute("SELECT id, email, full_name, password_hash FROM users WHERE email=%s", (payload.email,))
@@ -112,14 +105,12 @@ def login(payload: LoginRequest, db: Database = Depends(get_db)):
 	token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
 	return {"access_token": token, "token_type": "bearer", "user": {"id": user["id"], "email": user["email"], "full_name": user["full_name"]}}
 
-
-
 @app.get("/vehicle-detections", response_model=VehicleDetectionsResponse)
 def get_vehicle_detections(
-	start_date: date = Query(..., description="Start date for filtering detections (YYYY-MM-DD)"),
-	end_date: date = Query(..., description="End date for filtering detections (YYYY-MM-DD)"),
-	db: Database = Depends(get_db)
-):
+		start_date: date = Query(..., description="Start date for filtering detections (YYYY-MM-DD)"),
+		end_date: date = Query(..., description="End date for filtering detections (YYYY-MM-DD)"),
+		db: Database = Depends(get_db)
+	):
 	"""
 	Get vehicle detections within a date range.
 	Returns recent vehicle detections with timestamp, device, direction, vehicle type, 
@@ -140,13 +131,13 @@ def get_vehicle_detections(
 				JSON_EXTRACT(row_data, '$.time'),
 				JSON_EXTRACT(row_data, '$.Time'),
 				JSON_EXTRACT(row_data, '$.detection_time'),
-				JSON_EXTRACT(row_data, '$.Detection Time')
+				JSON_EXTRACT(row_data, '$."Detection Time"')
 			) as timestamp,
 			COALESCE(
 				JSON_EXTRACT(row_data, '$.device'),
 				JSON_EXTRACT(row_data, '$.Device'),
 				JSON_EXTRACT(row_data, '$.device_id'),
-				JSON_EXTRACT(row_data, '$.Device ID'),
+				JSON_EXTRACT(row_data, '$."Device ID"'),
 				JSON_EXTRACT(row_data, '$.camera'),
 				JSON_EXTRACT(row_data, '$.Camera')
 			) as device,
@@ -158,7 +149,7 @@ def get_vehicle_detections(
 			) as direction,
 			COALESCE(
 				JSON_EXTRACT(row_data, '$.vehicle_type'),
-				JSON_EXTRACT(row_data, '$.Vehicle Type'),
+				JSON_EXTRACT(row_data, '$."Vehicle Type"'),
 				JSON_EXTRACT(row_data, '$.type'),
 				JSON_EXTRACT(row_data, '$.Type'),
 				JSON_EXTRACT(row_data, '$.class'),
@@ -166,14 +157,14 @@ def get_vehicle_detections(
 			) as vehicle_type,
 			COALESCE(
 				JSON_EXTRACT(row_data, '$.type_score'),
-				JSON_EXTRACT(row_data, '$.Type Score'),
+				JSON_EXTRACT(row_data, '$."Type Score"'),
 				JSON_EXTRACT(row_data, '$.confidence'),
 				JSON_EXTRACT(row_data, '$.Confidence'),
 				JSON_EXTRACT(row_data, '$.detection_confidence')
 			) as type_score,
 			COALESCE(
 				JSON_EXTRACT(row_data, '$.license_plate'),
-				JSON_EXTRACT(row_data, '$.License Plate'),
+				JSON_EXTRACT(row_data, '$."License Plate"'),
 				JSON_EXTRACT(row_data, '$.plate'),
 				JSON_EXTRACT(row_data, '$.Plate'),
 				JSON_EXTRACT(row_data, '$.license'),
@@ -181,9 +172,9 @@ def get_vehicle_detections(
 			) as license_plate,
 			COALESCE(
 				JSON_EXTRACT(row_data, '$.ocr_score'),
-				JSON_EXTRACT(row_data, '$.OCR Score'),
+				JSON_EXTRACT(row_data, '$."OCR Score"'),
 				JSON_EXTRACT(row_data, '$.plate_confidence'),
-				JSON_EXTRACT(row_data, '$.Plate Confidence'),
+				JSON_EXTRACT(row_data, '$."Plate Confidence"'),
 				JSON_EXTRACT(row_data, '$.text_confidence')
 			) as ocr_score,
 			imported_at,
@@ -196,7 +187,7 @@ def get_vehicle_detections(
 			JSON_EXTRACT(row_data, '$.time') IS NOT NULL OR
 			JSON_EXTRACT(row_data, '$.Time') IS NOT NULL OR
 			JSON_EXTRACT(row_data, '$.detection_time') IS NOT NULL OR
-			JSON_EXTRACT(row_data, '$.Detection Time') IS NOT NULL
+			JSON_EXTRACT(row_data, '$."Detection Time"') IS NOT NULL
 		)
 		ORDER BY imported_at DESC
 		LIMIT 100
@@ -263,7 +254,6 @@ def get_vehicle_detections(
 	except Exception as exc:
 		logger.exception("Failed to get vehicle detections")
 		raise HTTPException(status_code=500, detail="Failed to retrieve vehicle detections") from exc
-
 
 @app.post("/query")
 def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
