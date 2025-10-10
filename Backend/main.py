@@ -12,6 +12,7 @@ from sql_agent import (
 	configure_gemini_from_env,
 	run_data_raw_agent,
 )
+from Anomaly_Detection import detect_anomalies, get_anomaly_summary
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -264,4 +265,55 @@ def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
 	except Exception as exc:
 		logger.exception("/query failed")
 		raise HTTPException(status_code=500, detail="Failed to process query") from exc
+
+
+@app.get("/anomalies")
+async def get_anomalies():
+	"""
+	Get all detected anomalies in real-time.
+	Returns comprehensive anomaly detection results including active and resolved anomalies.
+	"""
+	try:
+		logger.info("Fetching anomaly detection results...")
+		results = await detect_anomalies()
+		return results
+	except Exception as exc:
+		logger.exception("Failed to get anomalies")
+		raise HTTPException(status_code=500, detail="Failed to retrieve anomalies") from exc
+
+
+@app.get("/anomalies/summary")
+async def get_anomalies_summary():
+	"""
+	Get a summary of current anomaly status.
+	Returns active count, resolved count, and last detection time.
+	"""
+	try:
+		logger.info("Fetching anomaly summary...")
+		summary = await get_anomaly_summary()
+		return summary
+	except Exception as exc:
+		logger.exception("Failed to get anomaly summary")
+		raise HTTPException(status_code=500, detail="Failed to retrieve anomaly summary") from exc
+
+
+@app.get("/anomalies/active")
+async def get_active_anomalies():
+	"""
+	Get only active anomalies (excluding resolved ones).
+	Useful for real-time monitoring dashboards.
+	"""
+	try:
+		logger.info("Fetching active anomalies...")
+		results = await detect_anomalies()
+		active_anomalies = [a for a in results['anomalies'] if a.get('status') == 'active']
+		
+		return {
+			"active_anomalies": active_anomalies,
+			"active_count": len(active_anomalies),
+			"detection_time": results['detection_time']
+		}
+	except Exception as exc:
+		logger.exception("Failed to get active anomalies")
+		raise HTTPException(status_code=500, detail="Failed to retrieve active anomalies") from exc
 
