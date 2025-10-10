@@ -322,19 +322,9 @@ if __name__ == "__main__":
     async def main():
         logging.basicConfig(level=logging.INFO)
         
-        print("🔍 Starting Real-Time Anomaly Detection...")
-        print("=" * 50)
-        
+       
         # Run comprehensive detection
         results = await detect_anomalies()
-        
-        print(f"\n📊 Detection Summary:")
-        print(f"   Active Anomalies: {results['active_count']}")
-        print(f"   Total Anomalies: {results['total_count']}")
-        print(f"   Detection Time: {results['detection_time']}")
-        
-        print(f"\n🚨 Detected Anomalies:")
-        print("-" * 30)
         
         for i, anomaly in enumerate(results['anomalies'], 1):
             icon_map = {
@@ -344,16 +334,9 @@ if __name__ == "__main__":
             }
             icon = icon_map.get(anomaly.get("icon", "shield"), "🛡️")
             
-            print(f"{i}. {icon} {anomaly['type']}")
-            print(f"   Description: {anomaly['description']}")
-            print(f"   Status: {anomaly['status']}")
-            print(f"   Device: {anomaly.get('device_id', 'N/A')}")
-            print(f"   Time: {anomaly.get('timestamp', 'N/A')}")
-            print(f"   Severity: {anomaly.get('severity', 'medium')}")
-            print()
+    
         
         # Get summary
         summary = await get_anomaly_summary()
-        print(f"📈 Summary: {summary}")
     
     asyncio.run(main())
