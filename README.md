@@ -141,9 +141,3 @@ curl -X POST http://localhost:8000/query ^
   -H "Content-Type: application/json" ^
   -d '{"query":"List top 5 devices by error events this month"}'
 ```
-
-### Troubleshooting
-
-- If connection fails, confirm the Docker container is running: `docker ps`
-- Check logs: `docker logs fyp-mysql`
-- If SQL init did not run, remove the volume and re-run the container as noted above.
