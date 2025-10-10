@@ -170,6 +170,8 @@ def _parse_markdown_to_keyvalue(markdown_text: str) -> dict:
     # Save the last key-value pair
     if current_key and current_value:
         result[current_key] = '\n'.join(current_value).strip()
+        if current_key == "Possible Questions":
+            result[current_key] = result[current_key].split('\n')
     
     return result
 
@@ -247,7 +249,9 @@ def _build_prompt(question: str, use_device_scope: bool) -> str:
         "- Discuss trends over time, correlations, outliers, and potential causes/effects.\n"
         "- Include concise calculations (e.g., rates, ratios) and small summary tables if helpful.\n"
         "### Next Steps\n"
-        "- 2-3 concise suggestions for follow-up analysis or checks."
+        "- 2-3 concise suggestions for follow-up analysis or checks.\n"
+        "### Possible Questions\n"
+        "- List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings."
     )
 
     guardrails = (
@@ -339,6 +343,9 @@ Please provide your response in the following format:
 ### Next Steps
 - [2-3 concise suggestions for follow-up analysis]
 
+### Possible Questions
+- [List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings]
+
 Important: Only use SELECT statements. Do not modify data.
 """
             
@@ -388,7 +395,8 @@ Important: Only use SELECT statements. Do not modify data.
                         "Key Findings": "The system encountered parsing errors when trying to process this query.",
                         "SQL Used": "-- Query could not be executed due to parsing errors\nSELECT COUNT(*) FROM data_raw WHERE JSON_EXTRACT(row_data, '$.score') < 1;",
                         "Observations": "This appears to be a query about buses with maintenance scores below a threshold.\nThe system is experiencing technical difficulties with the AI agent parsing.",
-                        "Next Steps": "Manual Query: Try running the SQL query directly against the database.\nSystem Check: Verify that the Google API key and database connections are working properly.\nRetry: The query may work on a subsequent attempt."
+                        "Next Steps": "Manual Query: Try running the SQL query directly against the database.\nSystem Check: Verify that the Google API key and database connections are working properly.\nRetry: The query may work on a subsequent attempt.",
+                        "Possible Questions": "What is the average maintenance score for all buses?\nWhich buses have the lowest maintenance scores?\nHow many buses have scores between 1 and 2?\nWhat is the distribution of maintenance scores across the fleet?\nWhich buses need immediate maintenance attention?"
                     }
                     
                     return {
