@@ -32,8 +32,8 @@ From the repository root in Windows PowerShell:
 
 ```powershell
 cd Backend
-python -m venv .venv
-. .venv/Scripts/Activate.ps1
+python -m venv venv
+venv/Scripts/Activate
 pip install -r requirements.txt
 ```
 
