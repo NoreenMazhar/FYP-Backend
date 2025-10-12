@@ -74,20 +74,39 @@ def build_rows_for_insert(dataframe: pd.DataFrame) -> List[Tuple[str, str, str, 
         'ocrScore': 'ocr_score'
     }
     
-    # Check if all required columns exist
+    # Alternative column name mappings for different Excel formats
+    alternative_columns = {
+        'local_timestamp': 'local_timestamp',
+        'device_name': 'device_name',
+        'direction': 'direction',
+        'vehicle_type': 'vehicle_type',
+        'vehicle_types_lp_ocr': 'vehicle_types_lp_ocr',
+        'ocr_score': 'ocr_score'
+    }
+    
+    # Check if all required columns exist (try both formats)
     missing_columns = [col for col in expected_columns.keys() if col not in dataframe.columns]
     if missing_columns:
-        print(f"Warning: Missing columns: {missing_columns}")
-        return rows
+        # Try alternative column names
+        missing_alt = [col for col in alternative_columns.keys() if col not in dataframe.columns]
+        if missing_alt:
+            print(f"Warning: Missing columns: {missing_columns} (tried both formats)")
+            return rows
+        else:
+            # Use alternative column names
+            expected_columns = alternative_columns
+            print(f"Using alternative column names: {expected_columns}")
+    else:
+        print(f"Using standard column names: {expected_columns}")
     
     for idx, row in dataframe.iterrows():
         try:
-            local_timestamp = convert_cell_value(row['localTimesta'])
-            device_name = convert_cell_value(row['deviceName'])
-            direction = convert_cell_value(row['direction'])
-            vehicle_type = convert_cell_value(row['vehicleType'])
-            vehicle_types_lp_ocr = convert_cell_value(row['vehicleTypes lpOcr'])
-            ocr_score = convert_cell_value(row['ocrScore'])
+            local_timestamp = convert_cell_value(row[expected_columns['local_timestamp']])
+            device_name = convert_cell_value(row[expected_columns['device_name']])
+            direction = convert_cell_value(row[expected_columns['direction']])
+            vehicle_type = convert_cell_value(row[expected_columns['vehicle_type']])
+            vehicle_types_lp_ocr = convert_cell_value(row[expected_columns['vehicle_types_lp_ocr']])
+            ocr_score = convert_cell_value(row[expected_columns['ocr_score']])
             
             # Skip rows with missing required data
             if not all([local_timestamp, device_name, direction, vehicle_type, vehicle_types_lp_ocr, ocr_score]):

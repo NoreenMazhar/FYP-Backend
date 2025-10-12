@@ -65,41 +65,41 @@ INSERT INTO device_health (device_id, health_status, details, checked_at) VALUES
 -- ==============================================
 
 -- Generate realistic vehicle detection data for the last 30 days
-INSERT INTO data_raw (batch_id, source_file, row_index, row_data, imported_at, imported_by) VALUES
+INSERT INTO data_raw (local_timestamp, device_name, direction, vehicle_type, vehicle_types_lp_ocr, ocr_score) VALUES
 
 -- Recent detections (last few hours)
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 1, '{"timestamp": "2025-01-15 14:32:15", "device": "Device-A1", "direction": "Inbound", "vehicle_type": "Car", "type_score": 95, "license_plate": "ABC-1234", "ocr_score": 92}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 2, '{"timestamp": "2025-01-15 14:31:48", "device": "Device-B3", "direction": "Outbound", "vehicle_type": "Truck", "type_score": 89, "license_plate": "XYZ-5678", "ocr_score": 87}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 3, '{"timestamp": "2025-01-15 14:30:22", "device": "Device-C2", "direction": "Inbound", "vehicle_type": "Motorcycle", "type_score": 91, "license_plate": "MNO-9012", "ocr_score": 78}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 4, '{"timestamp": "2025-01-15 14:29:15", "device": "Device-A2", "direction": "Outbound", "vehicle_type": "Car", "type_score": 93, "license_plate": "DEF-3456", "ocr_score": 89}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 5, '{"timestamp": "2025-01-15 14:28:33", "device": "Device-B1", "direction": "Inbound", "vehicle_type": "Bus", "type_score": 88, "license_plate": "GHI-7890", "ocr_score": 85}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 6, '{"timestamp": "2025-01-15 14:27:45", "device": "Device-C3", "direction": "Outbound", "vehicle_type": "Car", "type_score": 96, "license_plate": "JKL-1234", "ocr_score": 94}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 7, '{"timestamp": "2025-01-15 14:26:45", "device": "Device-A2", "direction": "Outbound", "vehicle_type": "Truck", "type_score": 87, "license_plate": "JKL-6789", "ocr_score": 68}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 8, '{"timestamp": "2025-01-15 14:25:12", "device": "Device-A3", "direction": "Inbound", "vehicle_type": "Car", "type_score": 94, "license_plate": "PQR-2468", "ocr_score": 91}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
-('batch-001', 'vehicle_detections_2025-01-15.xlsx', 9, '{"timestamp": "2025-01-15 14:24:30", "device": "Device-B2", "direction": "Outbound", "vehicle_type": "Motorcycle", "type_score": 90, "license_plate": "STU-1357", "ocr_score": 82}', DATE_SUB(NOW(), INTERVAL 2 HOUR), 1),
+('2025-01-15 14:32:15', 'Device-A1', 'Inbound', 'Car', '0.95 ABC-1234', 0.92),
+('2025-01-15 14:31:48', 'Device-B3', 'Outbound', 'Truck', '0.89 XYZ-5678', 0.87),
+('2025-01-15 14:30:22', 'Device-C2', 'Inbound', 'Motorcycle', '0.91 MNO-9012', 0.78),
+('2025-01-15 14:29:15', 'Device-A2', 'Outbound', 'Car', '0.93 DEF-3456', 0.89),
+('2025-01-15 14:28:33', 'Device-B1', 'Inbound', 'Bus', '0.88 GHI-7890', 0.85),
+('2025-01-15 14:27:45', 'Device-C3', 'Outbound', 'Car', '0.96 JKL-1234', 0.94),
+('2025-01-15 14:26:45', 'Device-A2', 'Outbound', 'Truck', '0.87 JKL-6789', 0.68),
+('2025-01-15 14:25:12', 'Device-A3', 'Inbound', 'Car', '0.94 PQR-2468', 0.91),
+('2025-01-15 14:24:30', 'Device-B2', 'Outbound', 'Motorcycle', '0.90 STU-1357', 0.82),
 
 -- Earlier today
-('batch-002', 'vehicle_detections_2025-01-15.xlsx', 10, '{"timestamp": "2025-01-15 10:15:22", "device": "Device-A1", "direction": "Inbound", "vehicle_type": "Car", "type_score": 92, "license_plate": "VWX-9876", "ocr_score": 88}', DATE_SUB(NOW(), INTERVAL 6 HOUR), 1),
-('batch-002', 'vehicle_detections_2025-01-15.xlsx', 11, '{"timestamp": "2025-01-15 10:14:45", "device": "Device-B3", "direction": "Outbound", "vehicle_type": "Truck", "type_score": 85, "license_plate": "YZA-5432", "ocr_score": 79}', DATE_SUB(NOW(), INTERVAL 6 HOUR), 1),
-('batch-002', 'vehicle_detections_2025-01-15.xlsx', 12, '{"timestamp": "2025-01-15 10:13:18", "device": "Device-C2", "direction": "Inbound", "vehicle_type": "Bus", "type_score": 89, "license_plate": "BCD-1098", "ocr_score": 86}', DATE_SUB(NOW(), INTERVAL 6 HOUR), 1),
+('2025-01-15 10:15:22', 'Device-A1', 'Inbound', 'Car', '0.92 VWX-9876', 0.88),
+('2025-01-15 10:14:45', 'Device-B3', 'Outbound', 'Truck', '0.85 YZA-5432', 0.79),
+('2025-01-15 10:13:18', 'Device-C2', 'Inbound', 'Bus', '0.89 BCD-1098', 0.86),
 
 -- Yesterday
-('batch-003', 'vehicle_detections_2025-01-14.xlsx', 13, '{"timestamp": "2025-01-14 16:45:30", "device": "Device-A2", "direction": "Outbound", "vehicle_type": "Car", "type_score": 93, "license_plate": "EFG-7654", "ocr_score": 90}', DATE_SUB(NOW(), INTERVAL 1 DAY), 1),
-('batch-003', 'vehicle_detections_2025-01-14.xlsx', 14, '{"timestamp": "2025-01-14 16:44:12", "device": "Device-B1", "direction": "Inbound", "vehicle_type": "Motorcycle", "type_score": 87, "license_plate": "HIJ-3210", "ocr_score": 81}', DATE_SUB(NOW(), INTERVAL 1 DAY), 1),
-('batch-003', 'vehicle_detections_2025-01-14.xlsx', 15, '{"timestamp": "2025-01-14 16:43:55", "device": "Device-C3", "direction": "Outbound", "vehicle_type": "Truck", "type_score": 91, "license_plate": "KLM-8765", "ocr_score": 87}', DATE_SUB(NOW(), INTERVAL 1 DAY), 1),
+('2025-01-14 16:45:30', 'Device-A2', 'Outbound', 'Car', '0.93 EFG-7654', 0.90),
+('2025-01-14 16:44:12', 'Device-B1', 'Inbound', 'Motorcycle', '0.87 HIJ-3210', 0.81),
+('2025-01-14 16:43:55', 'Device-C3', 'Outbound', 'Truck', '0.91 KLM-8765', 0.87),
 
 -- Last week
-('batch-004', 'vehicle_detections_2025-01-08.xlsx', 16, '{"timestamp": "2025-01-08 09:30:15", "device": "Device-A3", "direction": "Inbound", "vehicle_type": "Car", "type_score": 94, "license_plate": "NOP-4321", "ocr_score": 89}', DATE_SUB(NOW(), INTERVAL 7 DAY), 1),
-('batch-004', 'vehicle_detections_2025-01-08.xlsx', 17, '{"timestamp": "2025-01-08 09:29:42", "device": "Device-B2", "direction": "Outbound", "vehicle_type": "Bus", "type_score": 88, "license_plate": "QRS-9876", "ocr_score": 84}', DATE_SUB(NOW(), INTERVAL 7 DAY), 1),
-('batch-004', 'vehicle_detections_2025-01-08.xlsx', 18, '{"timestamp": "2025-01-08 09:28:33", "device": "Device-A1", "direction": "Inbound", "vehicle_type": "Motorcycle", "type_score": 90, "license_plate": "TUV-5432", "ocr_score": 83}', DATE_SUB(NOW(), INTERVAL 7 DAY), 1),
+('2025-01-08 09:30:15', 'Device-A3', 'Inbound', 'Car', '0.94 NOP-4321', 0.89),
+('2025-01-08 09:29:42', 'Device-B2', 'Outbound', 'Bus', '0.88 QRS-9876', 0.84),
+('2025-01-08 09:28:33', 'Device-A1', 'Inbound', 'Motorcycle', '0.90 TUV-5432', 0.83),
 
 -- Two weeks ago
-('batch-005', 'vehicle_detections_2025-01-01.xlsx', 19, '{"timestamp": "2025-01-01 12:15:45", "device": "Device-B3", "direction": "Outbound", "vehicle_type": "Car", "type_score": 95, "license_plate": "WXY-2109", "ocr_score": 92}', DATE_SUB(NOW(), INTERVAL 14 DAY), 1),
-('batch-005', 'vehicle_detections_2025-01-01.xlsx', 20, '{"timestamp": "2025-01-01 12:14:22", "device": "Device-C2", "direction": "Inbound", "vehicle_type": "Truck", "type_score": 86, "license_plate": "ZAB-8765", "ocr_score": 78}', DATE_SUB(NOW(), INTERVAL 14 DAY), 1),
+('2025-01-01 12:15:45', 'Device-B3', 'Outbound', 'Car', '0.95 WXY-2109', 0.92),
+('2025-01-01 12:14:22', 'Device-C2', 'Inbound', 'Truck', '0.86 ZAB-8765', 0.78),
 
 -- Last month
-('batch-006', 'vehicle_detections_2024-12-15.xlsx', 21, '{"timestamp": "2024-12-15 14:20:30", "device": "Device-A2", "direction": "Inbound", "vehicle_type": "Car", "type_score": 92, "license_plate": "CDE-4321", "ocr_score": 88}', DATE_SUB(NOW(), INTERVAL 30 DAY), 1),
-('batch-006', 'vehicle_detections_2024-12-15.xlsx', 22, '{"timestamp": "2024-12-15 14:19:15", "device": "Device-B1", "direction": "Outbound", "vehicle_type": "Motorcycle", "type_score": 89, "license_plate": "FGH-7654", "ocr_score": 85}', DATE_SUB(NOW(), INTERVAL 30 DAY), 1);
+('2024-12-15 14:20:30', 'Device-A2', 'Inbound', 'Car', '0.92 CDE-4321', 0.88),
+('2024-12-15 14:19:15', 'Device-B1', 'Outbound', 'Motorcycle', '0.89 FGH-7654', 0.85);
 
 -- ==============================================
 -- 7. DEVICE EVENTS DATA

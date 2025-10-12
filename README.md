@@ -175,3 +175,49 @@ curl -X GET http://localhost:8000/anomalies/active
 ```
 
 For detailed information about the anomaly detection optimization, see [ANOMALY_OPTIMIZATION_README.md](ANOMALY_OPTIMIZATION_README.md).
+
+### Automatic Schema Discovery
+
+The SQL agent now automatically discovers database tables and their relationships instead of using hardcoded table lists. This makes the system more flexible and adaptable to schema changes.
+
+#### Key Features
+
+- **Automatic Table Discovery**: Inspects the database at runtime to find all tables, columns, and constraints
+- **Relationship Detection**: Automatically discovers foreign key relationships between tables
+- **Smart Table Grouping**: Groups tables by domain (devices, data, reports, chats, etc.)
+- **Intelligent Table Selection**: Automatically selects relevant tables based on the query context
+
+#### Schema API Endpoints
+
+```powershell
+# Get full schema information
+curl http://localhost:8000/schema
+
+# Get schema summary only
+curl http://localhost:8000/schema?summary_only=true
+```
+
+#### How It Works
+
+1. **Schema Discovery**: On first query, the system inspects the database to discover all tables and relationships
+2. **Table Selection**: For each query, the agent intelligently selects relevant tables based on keywords and relationships
+3. **Query Generation**: The LLM generates SQL using only the selected tables with full schema context
+4. **Relationship Awareness**: Foreign key relationships are included in the prompt to help with joins
+
+#### Testing Schema Discovery
+
+Run the test script to see the schema discovery in action:
+
+```powershell
+cd Backend
+python test_schema_discovery.py
+```
+
+This will display:
+
+- All discovered tables and their relationships
+- Table groupings by domain
+- Intelligent table selection examples
+- Detailed information about key tables
+
+For detailed information about the schema discovery feature, see [SCHEMA_DISCOVERY.md](SCHEMA_DISCOVERY.md).

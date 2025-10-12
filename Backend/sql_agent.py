@@ -2,6 +2,8 @@ import os
 import json
 import logging
 from typing import Any
+from sqlalchemy import create_engine, inspect, MetaData, text
+from collections import defaultdict
 
 import google.generativeai as genai
 from langchain_community.utilities import SQLDatabase
@@ -61,7 +63,228 @@ def _get_sqlalchemy_url_from_env() -> str:
 # Caches for different table scopes
 _LC_DBS: dict[str, SQLDatabase] = {}
 
-# Table scopes
+# Cache for discovered schema
+_DISCOVERED_SCHEMA: dict = None
+
+
+def discover_database_schema(connection_url: str = None) -> dict:
+    """
+    Automatically discover all tables and their relationships from the database.
+    Returns a dictionary with table names, their columns, and foreign key relationships.
+    """
+    global _DISCOVERED_SCHEMA
+    
+    if _DISCOVERED_SCHEMA is not None:
+        return _DISCOVERED_SCHEMA
+    
+    if connection_url is None:
+        connection_url = _get_sqlalchemy_url_from_env()
+    
+    try:
+        # Create engine and inspector
+        engine = create_engine(connection_url)
+        inspector = inspect(engine)
+        
+        schema_info = {
+            "tables": {},
+            "relationships": [],
+            "table_groups": {}
+        }
+        
+        # Get all table names
+        table_names = inspector.get_table_names()
+        logger.info(f"Discovered {len(table_names)} tables: {table_names}")
+        
+        # Get detailed information for each table
+        for table_name in table_names:
+            columns = inspector.get_columns(table_name)
+            primary_keys = inspector.get_pk_constraint(table_name)
+            foreign_keys = inspector.get_foreign_keys(table_name)
+            indexes = inspector.get_indexes(table_name)
+            
+            schema_info["tables"][table_name] = {
+                "columns": [
+                    {
+                        "name": col["name"],
+                        "type": str(col["type"]),
+                        "nullable": col["nullable"],
+                        "default": col.get("default")
+                    }
+                    for col in columns
+                ],
+                "primary_keys": primary_keys.get("constrained_columns", []),
+                "foreign_keys": [
+                    {
+                        "columns": fk["constrained_columns"],
+                        "referred_table": fk["referred_table"],
+                        "referred_columns": fk["referred_columns"]
+                    }
+                    for fk in foreign_keys
+                ],
+                "indexes": [idx["name"] for idx in indexes]
+            }
+            
+            # Build relationship list
+            for fk in foreign_keys:
+                schema_info["relationships"].append({
+                    "from_table": table_name,
+                    "from_columns": fk["constrained_columns"],
+                    "to_table": fk["referred_table"],
+                    "to_columns": fk["referred_columns"]
+                })
+        
+        # Group tables by their relationships
+        schema_info["table_groups"] = _group_tables_by_domain(schema_info)
+        
+        _DISCOVERED_SCHEMA = schema_info
+        logger.info(f"Schema discovery complete. Found {len(table_names)} tables and {len(schema_info['relationships'])} relationships")
+        
+        engine.dispose()
+        return schema_info
+        
+    except Exception as e:
+        logger.error(f"Error discovering database schema: {e}")
+        # Return a minimal schema with common tables as fallback
+        return {
+            "tables": {},
+            "relationships": [],
+            "table_groups": {
+                "data": ["data_raw"],
+                "devices": ["devices", "device_models"],
+                "users": ["users"]
+            }
+        }
+
+
+def _group_tables_by_domain(schema_info: dict) -> dict:
+    """
+    Group tables by domain based on naming patterns and relationships.
+    Returns a dictionary mapping domain names to lists of table names.
+    """
+    groups = defaultdict(list)
+    
+    for table_name in schema_info["tables"].keys():
+        # Categorize by table name prefix
+        if table_name.startswith("device_"):
+            groups["devices"].append(table_name)
+        elif table_name.startswith("report_"):
+            groups["reports"].append(table_name)
+        elif table_name.startswith("chat_"):
+            groups["chats"].append(table_name)
+        elif table_name == "data_raw":
+            groups["data"].append(table_name)
+        elif table_name == "users":
+            groups["users"].append(table_name)
+        elif table_name == "visualizations":
+            groups["visualizations"].append(table_name)
+        elif table_name == "reports":
+            groups["reports"].append(table_name)
+        elif table_name == "chats":
+            groups["chats"].append(table_name)
+        else:
+            groups["other"].append(table_name)
+    
+    # Also add base tables that have many relationships
+    for table_name in schema_info["tables"].keys():
+        related_count = sum(
+            1 for rel in schema_info["relationships"]
+            if rel["to_table"] == table_name
+        )
+        if related_count >= 3 and table_name not in groups["core"]:
+            groups["core"].append(table_name)
+    
+    return dict(groups)
+
+
+def get_tables_for_query(question: str, schema_info: dict = None) -> list[str]:
+    """
+    Determine which tables are relevant for a given question.
+    Uses schema information and query keywords to intelligently select tables.
+    """
+    if schema_info is None:
+        schema_info = discover_database_schema()
+    
+    question_lower = question.lower()
+    relevant_tables = set()
+    
+    # Check if question mentions specific table names or domain keywords
+    for table_name in schema_info["tables"].keys():
+        # Direct table name mention
+        if table_name in question_lower:
+            relevant_tables.add(table_name)
+            # Add related tables through foreign keys
+            for rel in schema_info["relationships"]:
+                if rel["from_table"] == table_name:
+                    relevant_tables.add(rel["to_table"])
+                elif rel["to_table"] == table_name:
+                    relevant_tables.add(rel["from_table"])
+    
+    # If no specific tables found, use domain-based selection
+    if not relevant_tables:
+        groups = schema_info.get("table_groups", {})
+        
+        # Device-related keywords
+        if _is_device_query(question):
+            relevant_tables.update(groups.get("devices", []))
+            relevant_tables.update(groups.get("users", []))  # Often needed for permissions
+        # Data analysis keywords
+        elif any(kw in question_lower for kw in ["vehicle", "license", "plate", "detection", "alpr", "traffic"]):
+            relevant_tables.update(groups.get("data", []))
+        # Report-related keywords
+        elif any(kw in question_lower for kw in ["report", "visualization"]):
+            relevant_tables.update(groups.get("reports", []))
+            relevant_tables.update(groups.get("visualizations", []))
+        # Chat-related keywords
+        elif any(kw in question_lower for kw in ["chat", "conversation"]):
+            relevant_tables.update(groups.get("chats", []))
+        # Default: include data_raw and devices as they're most common
+        else:
+            relevant_tables.update(groups.get("data", []))
+    
+    # Always include core tables if they exist
+    if "core" in schema_info.get("table_groups", {}):
+        relevant_tables.update(schema_info["table_groups"]["core"])
+    
+    result = list(relevant_tables) if relevant_tables else list(schema_info["tables"].keys())
+    logger.info(f"Selected {len(result)} tables for query: {result}")
+    return result
+
+
+def get_schema_summary(schema_info: dict = None) -> dict:
+    """
+    Get a human-readable summary of the discovered database schema.
+    Useful for debugging and understanding the database structure.
+    """
+    if schema_info is None:
+        schema_info = discover_database_schema()
+    
+    summary = {
+        "total_tables": len(schema_info.get("tables", {})),
+        "total_relationships": len(schema_info.get("relationships", [])),
+        "table_groups": {},
+        "tables": {}
+    }
+    
+    # Summarize table groups
+    for group_name, tables in schema_info.get("table_groups", {}).items():
+        summary["table_groups"][group_name] = {
+            "count": len(tables),
+            "tables": tables
+        }
+    
+    # Summarize each table
+    for table_name, table_info in schema_info.get("tables", {}).items():
+        summary["tables"][table_name] = {
+            "columns": len(table_info.get("columns", [])),
+            "primary_keys": table_info.get("primary_keys", []),
+            "foreign_keys_count": len(table_info.get("foreign_keys", [])),
+            "indexes_count": len(table_info.get("indexes", []))
+        }
+    
+    return summary
+
+
+# Legacy table definitions (kept for backwards compatibility)
 DATA_RAW_TABLES = ["data_raw"]
 DEVICES_TABLES = [
     "device_models",
@@ -106,16 +329,19 @@ def get_data_raw_schema_text() -> str:
         "Table: data_raw\n"
         "Columns:\n"
         "- id BIGINT (PK)\n"
-        "- local_timestamp VARCHAR(255) - timestamp from Excel data\n"
-        "- device_name VARCHAR(255) - device name (e.g., neom6)\n"
-        "- direction VARCHAR(100) - direction (approaching/receding)\n"
-        "- vehicle_type VARCHAR(100) - vehicle type (Pickup & Mini/Truck/Bus)\n"
-        "- vehicle_types_lp_ocr TEXT - combined field with type score and license plate (format: '0.99999 X4BUTQE')\n"
-        "- ocr_score DECIMAL(10,9) - OCR confidence score\n\n"
+        "- local_timestamp VARCHAR(255) - timestamp from Excel data (format: YYYY-MM-DD HH:MM:SS)\n"
+        "- device_name VARCHAR(255) - device name (e.g., Device-A1, Device-B3, Device-C2)\n"
+        "- direction VARCHAR(100) - direction (Inbound/Outbound)\n"
+        "- vehicle_type VARCHAR(100) - vehicle type (Car/Truck/Bus/Motorcycle)\n"
+        "- vehicle_types_lp_ocr TEXT - combined field with type score and license plate (format: '0.95 ABC-1234')\n"
+        "- ocr_score DECIMAL(10,9) - OCR confidence score (0.0-1.0) or 0-100 (percentage)   \n\n"
         "Notes:\n"
         "- To extract license plate from vehicle_types_lp_ocr: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1)\n"
         "- To extract type score from vehicle_types_lp_ocr: CAST(SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) AS DECIMAL(10,9))\n"
-        "- Timestamps are in format YYYY-MM-DDTHH:MM:SS or may be truncated"
+        "- Timestamps are in format YYYY-MM-DD HH:MM:SS\n"
+        "- Device names follow pattern: Device-{Letter}{Number}\n"
+        "- Vehicle types are: Car, Truck, Bus, Motorcycle\n"
+        "- Directions are: Inbound, Outbound"
     )
 
 
@@ -214,29 +440,77 @@ def _is_device_query(question: str) -> bool:
     return any(k in q for k in keywords)
 
 
-def _build_prompt(question: str, use_device_scope: bool) -> str:
-    """Compose guidance plus the user question to steer the agent."""
-    if use_device_scope:
-        tables_text = ", ".join(DEVICES_TABLES)
-        scope_instruction = (
-            "You must answer by querying ONLY the device tables: "
-            f"{tables_text}. Do not query unrelated tables."
+def _format_schema_relationships(schema_info: dict, relevant_tables: list[str]) -> str:
+    """Format schema relationships in a human-readable way for the LLM."""
+    if not schema_info or not relevant_tables:
+        return ""
+    
+    relationships_text = []
+    for rel in schema_info.get("relationships", []):
+        if rel["from_table"] in relevant_tables and rel["to_table"] in relevant_tables:
+            from_cols = ", ".join(rel["from_columns"])
+            to_cols = ", ".join(rel["to_columns"])
+            relationships_text.append(
+                f"- {rel['from_table']}.{from_cols} → {rel['to_table']}.{to_cols}"
+            )
+    
+    if relationships_text:
+        return "\n\nTable Relationships:\n" + "\n".join(relationships_text)
+    return ""
+
+
+def _build_prompt(question: str, use_device_scope: bool, schema_info: dict = None, relevant_tables: list[str] = None) -> str:
+    """Compose guidance plus the user question to steer the agent with dynamic schema information."""
+    if schema_info is None:
+        schema_info = discover_database_schema()
+    
+    if relevant_tables is None:
+        relevant_tables = get_tables_for_query(question, schema_info)
+    
+    tables_text = ", ".join(relevant_tables)
+    scope_instruction = (
+        f"You must answer by querying the following tables: {tables_text}. "
+        "These tables have been automatically selected as relevant to the question."
+    )
+    
+    # Build domain context based on table groups
+    groups = schema_info.get("table_groups", {})
+    domain_parts = []
+    
+    if any(t.startswith("device_") or t == "devices" for t in relevant_tables):
+        domain_parts.append(
+            "Device tables: Track device inventory, models, firmware, configuration, streams, health, "
+            "telemetry, events, permissions, groups, maintenance, and credentials."
         )
-        domain_context = (
-            "Schema gist: devices and device_models define inventory; device_streams/firmware/config* "
-            "cover media and configuration; device_health/telemetry/events record status and metrics; "
-            "device_groups and permissions handle organization and access."
+    
+    if "data_raw" in relevant_tables:
+        domain_parts.append(
+            "Data table: Contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems. "
+            "Fields include timestamp, device name, direction, vehicle type, license plate with OCR score. "
+            "The vehicle_types_lp_ocr field contains both type confidence score and license plate (format: '0.95 ABC-1234'). "
+            "Device names follow pattern Device-{Letter}{Number}. Vehicle types are Car, Truck, Bus, Motorcycle. "
+            "Directions are Inbound/Outbound. OCR scores range from 0.0 to 1.0."
         )
-    else:
-        tables_text = ", ".join(DATA_RAW_TABLES)
-        scope_instruction = (
-            "You must answer by querying ONLY the data lake table: "
-            f"{tables_text}. Access fields via JSON_EXTRACT on row_data."
+    
+    if any(t in ["reports", "report_members", "report_visualizations"] for t in relevant_tables):
+        domain_parts.append(
+            "Report tables: Handle report creation, collaboration (multiple authors), and linking to visualizations."
         )
-        domain_context = (
-            "Schema gist: data_raw holds vehicle detection data from ALPR (Automatic License Plate Recognition) systems. "
-            "Each row contains timestamp, device name, direction, vehicle type, combined type score with license plate, and OCR confidence score."
+    
+    if any(t in ["chats", "chat_visualizations"] for t in relevant_tables):
+        domain_parts.append(
+            "Chat tables: Manage user chat sessions and associated visualizations."
         )
+    
+    if "visualizations" in relevant_tables:
+        domain_parts.append(
+            "Visualizations: Reusable charts/graphs that can be included in both chats and reports."
+        )
+    
+    domain_context = " ".join(domain_parts) if domain_parts else "Query the selected database tables."
+    
+    # Add relationship information
+    relationship_context = _format_schema_relationships(schema_info, relevant_tables)
 
     formatting = (
         "Format your final answer in clear Markdown with these sections:\n"
@@ -249,13 +523,24 @@ def _build_prompt(question: str, use_device_scope: bool) -> str:
         "### Observations\n"
         "- Short insights or anomalies worth noting.\n"
         "### In-Depth Analysis (when requested or warranted)\n"
-        "- Provide deeper explanations: distributions, percentiles, moving averages, breakdowns by relevant dimensions (e.g., model, location, status).\n"
+        "- Provide deeper explanations: distributions, percentiles, moving averages, breakdowns by relevant dimensions (e.g., device, vehicle type, direction).\n"
         "- Discuss trends over time, correlations, outliers, and potential causes/effects.\n"
         "- Include concise calculations (e.g., rates, ratios) and small summary tables if helpful.\n"
+        "- For vehicle detection data: analyze by device performance, vehicle type distribution, OCR score patterns, time-based trends.\n"
         "### Next Steps\n"
         "- 2-3 concise suggestions for follow-up analysis or checks.\n"
         "### Possible Questions\n"
-        "- List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings."
+        "- List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings.\n"
+        "\n"
+        "IMPORTANT DATA STRUCTURE NOTES:\n"
+        "- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)\n"
+        "- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) for type score\n"
+        "- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) for license plate\n"
+        "- Device names: Device-A1, Device-B3, Device-C2, etc.\n"
+        "- Vehicle types: Car, Truck, Bus, Motorcycle\n"
+        "- Directions: Inbound, Outbound\n"
+        "- OCR scores: 0.0-1.0 (decimal) or 0-100 (percentage)\n"
+        "- Type scores: 0.0-1.0 (decimal from vehicle_types_lp_ocr)"
     )
 
     guardrails = (
@@ -265,7 +550,7 @@ def _build_prompt(question: str, use_device_scope: bool) -> str:
     )
 
     return (
-        f"{scope_instruction}\n{domain_context}\n{formatting}\n{guardrails}\n\n"
+        f"{scope_instruction}\n{domain_context}{relationship_context}\n{formatting}\n{guardrails}\n\n"
         f"User question: {question}"
     )
 
@@ -310,12 +595,13 @@ def _is_database_related_query(question: str) -> tuple[bool, str]:
             llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
             
             validation_prompt = f"""You are a database query validator. The database contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems with the following information:
-- Vehicle detections with timestamps
-- Device names (cameras/sensors)
-- Vehicle types (Pickup & Mini, Truck, Bus)
-- License plate numbers
-- Direction of travel (approaching/receding)
-- OCR confidence scores
+- Vehicle detections with timestamps (format: YYYY-MM-DD HH:MM:SS)
+- Device names (cameras/sensors) following pattern Device-{{Letter}}{{Number}}
+- Vehicle types: Car, Truck, Bus, Motorcycle
+- License plate numbers (extracted from vehicle_types_lp_ocr field)
+- Direction of travel: Inbound, Outbound
+- OCR confidence scores (0.0-1.0) or 0-100 (percentage)
+- Type confidence scores (0.0-1.0)
 
 Question: "{question}"
 
@@ -328,6 +614,8 @@ Examples:
 - "Show me license plates from yesterday" -> YES - Asks about license plate data
 - "What is Python?" -> NO - General programming question
 - "Tell me a joke" -> NO - Not a data query
+- "Which devices detected the most vehicles?" -> YES - Asks about device performance
+- "What are the average OCR scores by vehicle type?" -> YES - Asks about data analysis
 
 Your answer:"""
             
@@ -353,7 +641,7 @@ Your answer:"""
 def run_data_raw_agent(question: str) -> dict:
     """End-to-end: use LangChain SQL Agent (Gemini) to generate, run, and summarize SQL.
 
-    If the question is device-related, switch to device tables; otherwise use data_raw.
+    Uses automatic schema discovery to determine relevant tables dynamically.
     First checks if the question is database-related before processing.
     """
     configure_gemini_from_env()
@@ -375,13 +663,20 @@ def run_data_raw_agent(question: str) -> dict:
             "error": "Question not database-related"
         }
 
+    # Discover database schema and determine relevant tables
+    schema_info = discover_database_schema()
+    include_tables = get_tables_for_query(question, schema_info)
     use_device_scope = _is_device_query(question)
-    include_tables = DEVICES_TABLES if use_device_scope else DATA_RAW_TABLES
+    
+    # Log the discovered schema for debugging
+    logger.info(f"Using tables: {include_tables}")
+    logger.info(f"Available table groups: {list(schema_info.get('table_groups', {}).keys())}")
+    
     lc_db = get_lc_sql_db(include_tables)
 
     llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
-    enhanced_prompt = _build_prompt(question, use_device_scope)
+    enhanced_prompt = _build_prompt(question, use_device_scope, schema_info, include_tables)
 
     try:
         # Try the standard agent first
@@ -425,6 +720,16 @@ Database Schema:
 {lc_db.get_table_info()}
 
 Question: {question}
+
+IMPORTANT DATA STRUCTURE NOTES:
+- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)
+- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) for type score
+- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) for license plate
+- Device names: Device-A1, Device-B3, Device-C2, etc.
+- Vehicle types: Car, Truck, Bus, Motorcycle
+- Directions: Inbound, Outbound
+- OCR scores: 0.0-1.0 (decimal) or 0-100 (percentage)
+- Type scores: 0.0-1.0 (decimal from vehicle_types_lp_ocr)
 
 Please provide your response in the following format:
 

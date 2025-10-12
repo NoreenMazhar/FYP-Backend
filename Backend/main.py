@@ -11,6 +11,8 @@ from typing import List, Optional
 from sql_agent import (
 	configure_gemini_from_env,
 	run_data_raw_agent,
+	discover_database_schema,
+	get_schema_summary,
 )
 from Anomaly_Detection import detect_anomalies, get_anomaly_summary
 
@@ -182,8 +184,8 @@ def get_vehicle_detections(
 			SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) as license_plate,
 			ocr_score
 		FROM data_raw 
-		WHERE local_timestamp BETWEEN %s AND %s
-		ORDER BY id DESC
+		WHERE DATE(local_timestamp) BETWEEN %s AND %s
+		ORDER BY local_timestamp DESC
 		LIMIT 100
 		"""
 		
@@ -205,19 +207,12 @@ def get_vehicle_detections(
 					# Remove quotes if present
 					timestamp_str = str(timestamp_str).strip('"')
 					try:
-						# Handle the specific format from Excel: "2025-07-07T1" (truncated)
-						if timestamp_str.endswith('T1'):
-							# Complete the truncated timestamp
-							timestamp_str = timestamp_str + '0:00:00'
-						elif 'T' in timestamp_str and len(timestamp_str) < 19:
-							# Handle other truncated timestamps
-							timestamp_str = timestamp_str + ':00:00'
-						
-						timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+						# Parse the standard format: YYYY-MM-DD HH:MM:SS
+						timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
 					except ValueError:
-						# Try parsing with different formats
 						try:
-							timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+							# Try parsing with different formats
+							timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
 						except ValueError:
 							try:
 								# Try parsing the truncated format
@@ -292,6 +287,32 @@ def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
 	except Exception as exc:
 		logger.exception("/query failed")
 		raise HTTPException(status_code=500, detail="Failed to process query") from exc
+
+
+@app.get("/schema")
+def get_database_schema(summary_only: bool = Query(False, description="Return only a summary instead of full schema")):
+	"""
+	Get the discovered database schema including tables, columns, and relationships.
+	This endpoint shows what tables and relationships the SQL agent has discovered.
+	"""
+	try:
+		if summary_only:
+			# Return just a summary of the schema
+			summary = get_schema_summary()
+			return {
+				"summary": summary,
+				"message": "Schema summary retrieved successfully. The SQL agent uses this information to intelligently select relevant tables for queries."
+			}
+		else:
+			# Return full schema information
+			schema = discover_database_schema()
+			return {
+				"schema": schema,
+				"message": "Full schema retrieved successfully. The SQL agent uses this information to understand table relationships and select relevant tables for queries."
+			}
+	except Exception as exc:
+		logger.exception("/schema failed")
+		raise HTTPException(status_code=500, detail="Failed to retrieve schema information") from exc
 
 
 @app.get("/anomalies")
