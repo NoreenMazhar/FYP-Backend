@@ -277,7 +277,7 @@ def run_data_raw_agent(question: str) -> dict:
     include_tables = DEVICES_TABLES if use_device_scope else DATA_RAW_TABLES
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash-lite", temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
 
     enhanced_prompt = _build_prompt(question, use_device_scope)
 
