@@ -170,79 +170,28 @@ def get_vehicle_detections(
 		start_datetime = datetime.combine(start_date, datetime.min.time())
 		end_datetime = datetime.combine(end_date, datetime.max.time())
 		
-		# Query to extract vehicle detection data from data_raw table
-		# Try multiple possible field names for flexibility
+		# Query to extract vehicle detection data from simplified data_raw table
 		query = """
 		SELECT 
-			COALESCE(
-				JSON_EXTRACT(row_data, '$.timestamp'),
-				JSON_EXTRACT(row_data, '$.Timestamp'),
-				JSON_EXTRACT(row_data, '$.time'),
-				JSON_EXTRACT(row_data, '$.Time'),
-				JSON_EXTRACT(row_data, '$.detection_time'),
-				JSON_EXTRACT(row_data, '$."Detection Time"')
-			) as timestamp,
-			COALESCE(
-				JSON_EXTRACT(row_data, '$.device'),
-				JSON_EXTRACT(row_data, '$.Device'),
-				JSON_EXTRACT(row_data, '$.device_id'),
-				JSON_EXTRACT(row_data, '$."Device ID"'),
-				JSON_EXTRACT(row_data, '$.camera'),
-				JSON_EXTRACT(row_data, '$.Camera')
-			) as device,
-			COALESCE(
-				JSON_EXTRACT(row_data, '$.direction'),
-				JSON_EXTRACT(row_data, '$.Direction'),
-				JSON_EXTRACT(row_data, '$.movement'),
-				JSON_EXTRACT(row_data, '$.Movement')
-			) as direction,
-			COALESCE(
-				JSON_EXTRACT(row_data, '$.vehicle_type'),
-				JSON_EXTRACT(row_data, '$."Vehicle Type"'),
-				JSON_EXTRACT(row_data, '$.type'),
-				JSON_EXTRACT(row_data, '$.Type'),
-				JSON_EXTRACT(row_data, '$.class'),
-				JSON_EXTRACT(row_data, '$.Class')
-			) as vehicle_type,
-			COALESCE(
-				JSON_EXTRACT(row_data, '$.type_score'),
-				JSON_EXTRACT(row_data, '$."Type Score"'),
-				JSON_EXTRACT(row_data, '$.confidence'),
-				JSON_EXTRACT(row_data, '$.Confidence'),
-				JSON_EXTRACT(row_data, '$.detection_confidence')
-			) as type_score,
-			COALESCE(
-				JSON_EXTRACT(row_data, '$.license_plate'),
-				JSON_EXTRACT(row_data, '$."License Plate"'),
-				JSON_EXTRACT(row_data, '$.plate'),
-				JSON_EXTRACT(row_data, '$.Plate'),
-				JSON_EXTRACT(row_data, '$.license'),
-				JSON_EXTRACT(row_data, '$.License')
-			) as license_plate,
-			COALESCE(
-				JSON_EXTRACT(row_data, '$.ocr_score'),
-				JSON_EXTRACT(row_data, '$."OCR Score"'),
-				JSON_EXTRACT(row_data, '$.plate_confidence'),
-				JSON_EXTRACT(row_data, '$."Plate Confidence"'),
-				JSON_EXTRACT(row_data, '$.text_confidence')
-			) as ocr_score,
-			imported_at,
-			row_data
+			id,
+			local_timestamp as timestamp,
+			device_name as device,
+			direction,
+			vehicle_type,
+			CAST(SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) AS DECIMAL(10,9)) as type_score,
+			SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) as license_plate,
+			ocr_score
 		FROM data_raw 
-		WHERE imported_at BETWEEN %s AND %s
-		AND (
-			JSON_EXTRACT(row_data, '$.timestamp') IS NOT NULL OR
-			JSON_EXTRACT(row_data, '$.Timestamp') IS NOT NULL OR
-			JSON_EXTRACT(row_data, '$.time') IS NOT NULL OR
-			JSON_EXTRACT(row_data, '$.Time') IS NOT NULL OR
-			JSON_EXTRACT(row_data, '$.detection_time') IS NOT NULL OR
-			JSON_EXTRACT(row_data, '$."Detection Time"') IS NOT NULL
-		)
-		ORDER BY imported_at DESC
+		WHERE local_timestamp BETWEEN %s AND %s
+		ORDER BY id DESC
 		LIMIT 100
 		"""
 		
-		results = db.execute(query, (start_datetime, end_datetime))
+		# Convert dates to string format for comparison with local_timestamp
+		start_str = start_datetime.strftime('%Y-%m-%d')
+		end_str = end_datetime.strftime('%Y-%m-%d')
+		
+		results = db.execute(query, (start_str, end_str))
 		
 		if not results:
 			return VehicleDetectionsResponse(detections=[], total_count=0)
@@ -250,21 +199,34 @@ def get_vehicle_detections(
 		detections = []
 		for row in results:
 			try:
-				# Parse timestamp
+				# Parse timestamp from local_timestamp field
 				timestamp_str = row['timestamp']
 				if timestamp_str:
 					# Remove quotes if present
-					timestamp_str = timestamp_str.strip('"')
+					timestamp_str = str(timestamp_str).strip('"')
 					try:
+						# Handle the specific format from Excel: "2025-07-07T1" (truncated)
+						if timestamp_str.endswith('T1'):
+							# Complete the truncated timestamp
+							timestamp_str = timestamp_str + '0:00:00'
+						elif 'T' in timestamp_str and len(timestamp_str) < 19:
+							# Handle other truncated timestamps
+							timestamp_str = timestamp_str + ':00:00'
+						
 						timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
 					except ValueError:
 						# Try parsing with different formats
 						try:
 							timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
 						except ValueError:
-							timestamp = row['imported_at']
+							try:
+								# Try parsing the truncated format
+								timestamp = datetime.strptime(timestamp_str, '%Y-%m-%dT%H')
+							except ValueError:
+								# Use current time as fallback
+								timestamp = datetime.now()
 				else:
-					timestamp = row['imported_at']
+					timestamp = datetime.now()
 				
 				# Helper function to safely extract string values
 				def safe_string(value, default="Unknown"):

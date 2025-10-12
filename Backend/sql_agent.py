@@ -106,13 +106,16 @@ def get_data_raw_schema_text() -> str:
         "Table: data_raw\n"
         "Columns:\n"
         "- id BIGINT (PK)\n"
-        "- batch_id CHAR(36)\n"
-        "- source_file VARCHAR(512)\n"
-        "- row_index INT (1-based index from original sheet)\n"
-        "- row_data JSON (entire row as JSON object; use JSON_EXTRACT to access fields)\n"
-        "- imported_at TIMESTAMP\n"
-        "- imported_by BIGINT (nullable)\n\n"
-        "Notes: Use MySQL JSON functions, e.g., JSON_EXTRACT(row_data, '$.ColumnName')."
+        "- local_timestamp VARCHAR(255) - timestamp from Excel data\n"
+        "- device_name VARCHAR(255) - device name (e.g., neom6)\n"
+        "- direction VARCHAR(100) - direction (approaching/receding)\n"
+        "- vehicle_type VARCHAR(100) - vehicle type (Pickup & Mini/Truck/Bus)\n"
+        "- vehicle_types_lp_ocr TEXT - combined field with type score and license plate (format: '0.99999 X4BUTQE')\n"
+        "- ocr_score DECIMAL(10,9) - OCR confidence score\n\n"
+        "Notes:\n"
+        "- To extract license plate from vehicle_types_lp_ocr: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1)\n"
+        "- To extract type score from vehicle_types_lp_ocr: CAST(SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) AS DECIMAL(10,9))\n"
+        "- Timestamps are in format YYYY-MM-DDTHH:MM:SS or may be truncated"
     )
 
 
@@ -231,7 +234,8 @@ def _build_prompt(question: str, use_device_scope: bool) -> str:
             f"{tables_text}. Access fields via JSON_EXTRACT on row_data."
         )
         domain_context = (
-            "Schema gist: data_raw holds imported spreadsheet rows as JSON. Use MySQL JSON functions."
+            "Schema gist: data_raw holds vehicle detection data from ALPR (Automatic License Plate Recognition) systems. "
+            "Each row contains timestamp, device name, direction, vehicle type, combined type score with license plate, and OCR confidence score."
         )
 
     formatting = (

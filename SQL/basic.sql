@@ -10,16 +10,22 @@ CREATE TABLE users (
   updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 2) Raw data from Excel (row-wise, stored as JSON for flexibility)
+-- 2) Raw data from Excel (simplified structure with only essential fields)
 CREATE TABLE data_raw (
-  id              BIGINT AUTO_INCREMENT PRIMARY KEY,
-  batch_id        CHAR(36) NOT NULL,                              -- one Excel import/run (UUID as CHAR)
-  source_file     VARCHAR(512) NOT NULL,                          -- original file name/path
-  row_index       INT NOT NULL,                                   -- 1-based or 0-based row index from file
-  row_data        JSON NOT NULL,                                  -- entire row as JSON
-  imported_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  imported_by     BIGINT NULL,                                    -- who imported (optional)
-  FOREIGN KEY (imported_by) REFERENCES users(id) ON DELETE SET NULL
+  id                    BIGINT AUTO_INCREMENT PRIMARY KEY,
+  local_timestamp       VARCHAR(255) NOT NULL,                    -- timestamp from Excel
+  device_name           VARCHAR(255) NOT NULL,                    -- device name
+  direction             VARCHAR(100) NOT NULL,                    -- direction (approaching/receding)
+  vehicle_type          VARCHAR(100) NOT NULL,                    -- vehicle type (Pickup & Mini/Truck/Bus)
+  vehicle_types_lp_ocr  TEXT NOT NULL,                            -- combined field with type score and license plate
+  ocr_score             DECIMAL(10,9) NOT NULL,                   -- OCR confidence score
+  
+  -- Add indexes for better query performance
+  INDEX idx_local_timestamp (local_timestamp),
+  INDEX idx_device_name (device_name),
+  INDEX idx_direction (direction),
+  INDEX idx_vehicle_type (vehicle_type),
+  INDEX idx_ocr_score (ocr_score)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 3) Visualizations (reusable across chats and reports)
