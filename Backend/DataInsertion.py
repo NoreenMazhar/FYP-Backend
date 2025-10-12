@@ -66,11 +66,12 @@ def build_rows_for_insert(dataframe: pd.DataFrame) -> List[Tuple[str, str, str, 
     
     # Expected column names from the Excel file
     expected_columns = {
-        'localTimesta': 'local_timestamp',
+        'localTimestamp': 'local_timestamp',
         'deviceName': 'device_name',
         'direction': 'direction',
         'vehicleType': 'vehicle_type',
-        'vehicleTypes lpOcr': 'vehicle_types_lp_ocr',
+        'vehicleTypeScore': 'vehicle_type_score',
+        'lpOcr': 'lp_ocr',
         'ocrScore': 'ocr_score'
     }
     
@@ -84,36 +85,45 @@ def build_rows_for_insert(dataframe: pd.DataFrame) -> List[Tuple[str, str, str, 
         'ocr_score': 'ocr_score'
     }
     
-    # Check if all required columns exist (try both formats)
+    # Check if all required columns exist
     missing_columns = [col for col in expected_columns.keys() if col not in dataframe.columns]
     if missing_columns:
-        # Try alternative column names
-        missing_alt = [col for col in alternative_columns.keys() if col not in dataframe.columns]
-        if missing_alt:
-            print(f"Warning: Missing columns: {missing_columns} (tried both formats)")
-            return rows
-        else:
-            # Use alternative column names
-            expected_columns = alternative_columns
-            print(f"Using alternative column names: {expected_columns}")
+        print(f"Warning: Missing columns: {missing_columns}")
+        print(f"Available columns: {dataframe.columns.tolist()}")
+        return rows
     else:
         print(f"Using standard column names: {expected_columns}")
     
     for idx, row in dataframe.iterrows():
         try:
-            local_timestamp = convert_cell_value(row[expected_columns['local_timestamp']])
-            device_name = convert_cell_value(row[expected_columns['device_name']])
+            local_timestamp = convert_cell_value(row[expected_columns['localTimestamp']])
+            device_name = convert_cell_value(row[expected_columns['deviceName']])
             direction = convert_cell_value(row[expected_columns['direction']])
-            vehicle_type = convert_cell_value(row[expected_columns['vehicle_type']])
-            vehicle_types_lp_ocr = convert_cell_value(row[expected_columns['vehicle_types_lp_ocr']])
-            ocr_score = convert_cell_value(row[expected_columns['ocr_score']])
+            vehicle_type = convert_cell_value(row[expected_columns['vehicleType']])
+            vehicle_type_score = convert_cell_value(row[expected_columns['vehicleTypeScore']])
+            lp_ocr = convert_cell_value(row[expected_columns['lpOcr']])
+            ocr_score = convert_cell_value(row[expected_columns['ocrScore']])
+            
+            # Create the combined vehicle_types_lp_ocr field
+            vehicle_types_lp_ocr = f"{vehicle_type_score} {lp_ocr}"
             
             # Skip rows with missing required data
-            if not all([local_timestamp, device_name, direction, vehicle_type, vehicle_types_lp_ocr, ocr_score]):
+            if not all([local_timestamp, device_name, direction, vehicle_type, vehicle_type_score, lp_ocr, ocr_score]):
                 continue
             
+            # Convert timestamp from ISO format to MySQL datetime format
+            if isinstance(local_timestamp, str) and 'T' in local_timestamp:
+                # Convert from ISO format (2025-05-01T03:03:27.604Z) to MySQL format (2025-05-01 03:03:27)
+                try:
+                    from datetime import datetime
+                    dt = datetime.fromisoformat(local_timestamp.replace('Z', '+00:00'))
+                    local_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+                except:
+                    local_timestamp = str(local_timestamp)
+            else:
+                local_timestamp = str(local_timestamp)
+            
             # Convert to strings (except ocr_score which is float)
-            local_timestamp = str(local_timestamp)
             device_name = str(device_name)
             direction = str(direction)
             vehicle_type = str(vehicle_type)
