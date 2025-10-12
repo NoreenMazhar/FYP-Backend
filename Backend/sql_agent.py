@@ -270,12 +270,110 @@ def _build_prompt(question: str, use_device_scope: bool) -> str:
     )
 
 
+def _is_database_related_query(question: str) -> tuple[bool, str]:
+    """
+    Check if the question is related to the database content.
+    Returns (is_related, reason) tuple.
+    Uses both keyword matching and LLM-based validation.
+    """
+    question_lower = question.lower()
+    
+    # Database-related keywords for ALPR/vehicle detection data
+    database_keywords = [
+        # Vehicle-related
+        'vehicle', 'car', 'truck', 'bus', 'pickup', 'mini',
+        # ALPR-related
+        'license', 'plate', 'ocr', 'detection', 'detected',
+        # Direction-related
+        'approaching', 'receding', 'direction',
+        # Device-related
+        'device', 'camera', 'sensor', 'neom',
+        # Time-related queries
+        'timestamp', 'time', 'date', 'when', 'hour', 'day', 'week', 'month',
+        # Counting/statistics
+        'how many', 'count', 'total', 'number of', 'average', 'sum',
+        # Data queries
+        'show', 'list', 'find', 'get', 'fetch', 'retrieve', 'search',
+        'what', 'which', 'where',
+        # Analysis
+        'analyze', 'report', 'statistics', 'stats', 'summary',
+        # Specific to our data
+        'alpr', 'traffic', 'score', 'confidence'
+    ]
+    
+    # First pass: Quick keyword check
+    has_keyword = any(keyword in question_lower for keyword in database_keywords)
+    
+    # If no keywords found, use LLM for more sophisticated check
+    if not has_keyword:
+        try:
+            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+            
+            validation_prompt = f"""You are a database query validator. The database contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems with the following information:
+- Vehicle detections with timestamps
+- Device names (cameras/sensors)
+- Vehicle types (Pickup & Mini, Truck, Bus)
+- License plate numbers
+- Direction of travel (approaching/receding)
+- OCR confidence scores
+
+Question: "{question}"
+
+Is this question asking for information that could be found in this vehicle detection database?
+Answer with ONLY "YES" or "NO" followed by a brief reason.
+
+Examples:
+- "How many trucks were detected?" -> YES - Asks about vehicle count
+- "What is the weather today?" -> NO - Not related to vehicle detection data
+- "Show me license plates from yesterday" -> YES - Asks about license plate data
+- "What is Python?" -> NO - General programming question
+- "Tell me a joke" -> NO - Not a data query
+
+Your answer:"""
+            
+            response = llm.invoke(validation_prompt)
+            response_text = response.content.strip().upper()
+            
+            if response_text.startswith("YES"):
+                return True, ""
+            else:
+                reason = "The query you asked is not related to the database, so I can't answer it."
+                return False, reason
+                
+        except Exception as e:
+            # If LLM check fails, be conservative and reject
+            logger.warning(f"LLM validation failed: {e}")
+            reason = "The query you asked is not related to the database, so I can't answer it."
+            return False, reason
+    
+    # Has relevant keywords, allow the query
+    return True, ""
+
+
 def run_data_raw_agent(question: str) -> dict:
     """End-to-end: use LangChain SQL Agent (Gemini) to generate, run, and summarize SQL.
 
     If the question is device-related, switch to device tables; otherwise use data_raw.
+    First checks if the question is database-related before processing.
     """
     configure_gemini_from_env()
+    
+    # Check if question is database-related
+    is_related, rejection_reason = _is_database_related_query(question)
+    if not is_related:
+        return {
+            "question": question,
+            "executed_sql": None,
+            "result": {
+                "Overview": rejection_reason,
+                "Key Findings": "This question cannot be answered using the database.",
+                "SQL Used": "N/A - Question not related to database content",
+                "Observations": "The question appears to be about topics outside the scope of the vehicle detection database.",
+                "Next Steps": "Please ask questions related to vehicle detections, license plates, devices, timestamps, or traffic data."
+            },
+            "used_device_scope": False,
+            "error": "Question not database-related"
+        }
 
     use_device_scope = _is_device_query(question)
     include_tables = DEVICES_TABLES if use_device_scope else DATA_RAW_TABLES

@@ -269,7 +269,24 @@ def get_vehicle_detections(
 @app.post("/query")
 def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
 	try:
-		return run_data_raw_agent(payload.query)
+		result = run_data_raw_agent(payload.query)
+		
+		# Check if query was rejected for not being database-related
+		if result.get("error") == "Question not database-related":
+			# Return 400 Bad Request with clear message
+			raise HTTPException(
+				status_code=400, 
+				detail={
+					"message": "The query you asked is not related to the database, so I can't answer it.",
+					"hint": "Please ask questions related to vehicle detections, license plates, devices, timestamps, or traffic data.",
+					"result": result
+				}
+			)
+		
+		return result
+	except HTTPException:
+		# Re-raise HTTP exceptions
+		raise
 	except ValueError as ve:
 		raise HTTPException(status_code=400, detail=str(ve))
 	except Exception as exc:
