@@ -25,7 +25,15 @@ class CustomSQLOutputParser(ReActSingleInputOutputParser):
     def parse(self, text: str) -> AgentFinish:
         """Parse the agent output, handling markdown format."""
         # If the text looks like a final answer in markdown format, return it as AgentFinish
-        if "### Overview" in text or "### Key Findings" in text or "### SQL Used" in text:
+        if any(marker in text for marker in ["### Overview", "### Key Findings", "### SQL Used", "### Observations"]):
+            return AgentFinish(
+                return_values={"output": text},
+                log=text
+            )
+        
+        # Check if it's a direct answer without ReAct format
+        if not any(marker in text for marker in ["Action:", "Observation:", "Thought:"]):
+            # This looks like a direct answer, treat it as final
             return AgentFinish(
                 return_values={"output": text},
                 log=text
@@ -284,28 +292,6 @@ def get_schema_summary(schema_info: dict = None) -> dict:
     return summary
 
 
-# Legacy table definitions (kept for backwards compatibility)
-DATA_RAW_TABLES = ["data_raw"]
-DEVICES_TABLES = [
-    "device_models",
-    "devices",
-    "device_firmware",
-    "device_config_profiles",
-    "device_config_applied",
-    "device_network_interfaces",
-    "device_streams",
-    "device_mounts",
-    "device_health",
-    "device_telemetry",
-    "device_events",
-    "device_permissions",
-    "device_groups",
-    "device_group_members",
-    "device_maintenance",
-    "device_credentials",
-]
-
-
 def get_lc_sql_db(include_tables: list[str]) -> SQLDatabase:
     """Get or create a cached SQLDatabase for the given include_tables scope."""
     global _LC_DBS
@@ -370,6 +356,35 @@ def _execute_sql_safely(db: SQLDatabase, sql: str) -> tuple[list, str]:
         return result, ""
     except Exception as e:
         return [], f"SQL execution error: {str(e)}"
+
+
+def _extract_sql_from_text(text: str) -> str:
+    """Extract SQL query from text, looking for common patterns."""
+    if not text:
+        return None
+    
+    # Look for SQL in code blocks
+    if "```sql" in text:
+        start = text.find("```sql") + 6
+        end = text.find("```", start)
+        if end > start:
+            return text[start:end].strip()
+    
+    # Look for SQL in action format
+    lines = text.split('\n')
+    for i, line in enumerate(lines):
+        if "Action Input:" in line and i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if "SELECT" in next_line.upper():
+                return next_line
+    
+    # Look for standalone SELECT statements
+    for line in lines:
+        line = line.strip()
+        if line.upper().startswith("SELECT ") and not line.upper().startswith("SELECT * FROM"):
+            return line
+    
+    return None
 
 
 def _parse_markdown_to_keyvalue(markdown_text: str) -> dict:
@@ -522,13 +537,6 @@ def _build_prompt(question: str, use_device_scope: bool, schema_info: dict = Non
         "```sql\n<your final SQL here>\n```\n"
         "### Observations\n"
         "- Short insights or anomalies worth noting.\n"
-        "### In-Depth Analysis (when requested or warranted)\n"
-        "- Provide deeper explanations: distributions, percentiles, moving averages, breakdowns by relevant dimensions (e.g., device, vehicle type, direction).\n"
-        "- Discuss trends over time, correlations, outliers, and potential causes/effects.\n"
-        "- Include concise calculations (e.g., rates, ratios) and small summary tables if helpful.\n"
-        "- For vehicle detection data: analyze by device performance, vehicle type distribution, OCR score patterns, time-based trends.\n"
-        "### Next Steps\n"
-        "- 2-3 concise suggestions for follow-up analysis or checks.\n"
         "### Possible Questions\n"
         "- List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings.\n"
         "\n"
@@ -546,7 +554,9 @@ def _build_prompt(question: str, use_device_scope: bool, schema_info: dict = Non
     guardrails = (
         "Constraints: Use only read-only SELECTs; avoid DDL/DML. If multiple queries are needed, "
         "show the final, most important SQL in the SQL Used section. Keep the language simple. "
-        "If the user asks for deep or detailed analysis, expand the In-Depth Analysis section accordingly."
+        "If the user asks for deep or detailed analysis, expand the In-Depth Analysis section accordingly.\n\n"
+        "IMPORTANT: Follow the ReAct format. Use 'Action:' to specify what you're doing, 'Observation:' to show results, "
+        "and 'Final Answer:' to provide your complete response in the markdown format specified above."
     )
 
     return (
@@ -686,6 +696,7 @@ def run_data_raw_agent(question: str) -> dict:
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             verbose=True,
             handle_parsing_errors=True,
+            max_iterations=3,
         )
 
         result = agent_executor.invoke({"input": enhanced_prompt})
@@ -694,9 +705,44 @@ def run_data_raw_agent(question: str) -> dict:
         # Extract executed SQL for debugging
         executed_sql = None
         for step in result.get("intermediate_steps", []):
-            if isinstance(step, tuple) and "SELECT" in step[0].upper():
-                executed_sql = step[0]
-                break
+            if isinstance(step, tuple) and len(step) >= 2:
+                # Check both the action and observation for SQL
+                action = step[0] if len(step) > 0 else ""
+                observation = step[1] if len(step) > 1 else ""
+                
+                # Look for SQL in action
+                if isinstance(action, str) and "SELECT" in action.upper():
+                    executed_sql = action
+                    break
+                # Look for SQL in observation (sometimes the agent puts SQL there)
+                elif isinstance(observation, str) and "SELECT" in observation.upper():
+                    # Extract SQL from observation if it contains SQL
+                    lines = observation.split('\n')
+                    for line in lines:
+                        if "SELECT" in line.upper():
+                            executed_sql = line.strip()
+                            break
+                    if executed_sql:
+                        break
+        
+        # If no SQL found in intermediate steps, try to extract from output text
+        if not executed_sql:
+            executed_sql = _extract_sql_from_text(output_text)
+        
+        # If we found SQL but it wasn't executed, try to execute it directly
+        if executed_sql and not any("Observation:" in str(step) for step in result.get("intermediate_steps", [])):
+            try:
+                logger.info(f"Executing SQL directly: {executed_sql}")
+                sql_results, sql_error = _execute_sql_safely(lc_db, executed_sql)
+                if sql_error:
+                    logger.warning(f"Direct SQL execution failed: {sql_error}")
+                else:
+                    logger.info(f"Direct SQL execution successful, returned {len(sql_results)} results")
+                    # Add the results to the output text if it's not already there
+                    if "Observation:" not in output_text:
+                        output_text += f"\n\nObservation: {sql_results}"
+            except Exception as e:
+                logger.warning(f"Direct SQL execution error: {e}")
 
         # Parse markdown result into key-value pairs
         parsed_result = _parse_markdown_to_keyvalue(output_text)
@@ -709,7 +755,32 @@ def run_data_raw_agent(question: str) -> dict:
         }
         
     except Exception as e:
-        logger.warning(f"Standard agent failed: {str(e)}")
+        error_msg = str(e)
+        logger.warning(f"Standard agent failed: {error_msg}")
+        
+        # Check if it's a parsing error specifically
+        if "Could not parse LLM output" in error_msg or "output parsing error" in error_msg.lower():
+            logger.info("Detected parsing error, attempting to extract response from error message...")
+            # Try to extract the actual response from the error message
+            if "### Overview" in error_msg:
+                # Extract the response from the error message
+                start_marker = "Could not parse LLM output: `"
+                end_marker = "`"
+                start_idx = error_msg.find(start_marker)
+                if start_idx != -1:
+                    start_idx += len(start_marker)
+                    end_idx = error_msg.find(end_marker, start_idx)
+                    if end_idx != -1:
+                        extracted_response = error_msg[start_idx:end_idx]
+                        logger.info("Successfully extracted response from error message")
+                        parsed_result = _parse_markdown_to_keyvalue(extracted_response)
+                        return {
+                            "question": question,
+                            "executed_sql": None,
+                            "result": parsed_result,
+                            "used_device_scope": use_device_scope,
+                            "extracted_from_error": True,
+                        }
         
         # Fallback: Use direct LLM call with structured prompt
         try:
