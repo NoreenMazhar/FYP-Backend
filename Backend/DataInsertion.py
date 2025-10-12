@@ -162,7 +162,8 @@ def insert_rows(db: Database, rows: List[Tuple[str, str, str, str, str, float]],
                 cursor.executemany(sql, buffer)
                 conn.commit()
                 total += len(buffer)
-                print(f"Inserted {total} rows so far...")
+                if total % 1000 == 0:
+                    print(f"Inserted {total} rows so far...")
                 buffer.clear()
         if buffer:
             cursor.executemany(sql, buffer)
