@@ -68,11 +68,38 @@ def ensure_users_table(db: Database) -> None:
 		"""
 	)
 
+def ensure_anomalies_table(db: Database) -> None:
+	db.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS anomalies (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			anomaly_type VARCHAR(100) NOT NULL,
+			description TEXT NOT NULL,
+			status VARCHAR(20) NOT NULL DEFAULT 'active',
+			severity VARCHAR(20) NOT NULL DEFAULT 'medium',
+			device_id VARCHAR(100),
+			icon VARCHAR(50),
+			details JSON NOT NULL DEFAULT ('{}'),
+			detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			resolved_at TIMESTAMP NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			
+			INDEX idx_anomaly_type (anomaly_type),
+			INDEX idx_status (status),
+			INDEX idx_device_id (device_id),
+			INDEX idx_detected_at (detected_at),
+			INDEX idx_severity (severity)
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		"""
+	)
+
 
 @app.on_event("startup")
 def on_startup():
 	db = Database.get_instance()
 	ensure_users_table(db)
+	ensure_anomalies_table(db)
 	configure_gemini_from_env()
 
 @app.post("/auth/register")
@@ -268,52 +295,224 @@ def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
 
 
 @app.get("/anomalies")
-async def get_anomalies():
+async def get_anomalies(db: Database = Depends(get_db)):
 	"""
-	Get all detected anomalies in real-time.
+	Get all detected anomalies from the database.
 	Returns comprehensive anomaly detection results including active and resolved anomalies.
 	"""
 	try:
-		logger.info("Fetching anomaly detection results...")
-		results = await detect_anomalies()
-		return results
+		logger.info("Fetching anomalies from database...")
+		
+		# Get all anomalies from database
+		anomalies = db.execute("""
+			SELECT 
+				id, anomaly_type, description, status, severity, device_id, 
+				icon, details, detected_at, resolved_at, created_at, updated_at
+			FROM anomalies 
+			ORDER BY detected_at DESC
+		""")
+		
+		if not anomalies:
+			return {
+				"anomalies": [],
+				"active_count": 0,
+				"total_count": 0,
+				"detection_time": datetime.now().isoformat()
+			}
+		
+		# Convert database results to the expected format
+		formatted_anomalies = []
+		active_count = 0
+		
+		for anomaly in anomalies:
+			# Parse details JSON
+			details = {}
+			if anomaly['details']:
+				try:
+					details = json.loads(anomaly['details']) if isinstance(anomaly['details'], str) else anomaly['details']
+				except:
+					details = {}
+			
+			formatted_anomaly = {
+				"type": anomaly['anomaly_type'],
+				"description": anomaly['description'],
+				"status": anomaly['status'],
+				"severity": anomaly['severity'],
+				"device_id": anomaly['device_id'],
+				"icon": anomaly['icon'],
+				"details": details,
+				"timestamp": anomaly['detected_at'].isoformat() if anomaly['detected_at'] else None
+			}
+			
+			formatted_anomalies.append(formatted_anomaly)
+			if anomaly['status'] == 'active':
+				active_count += 1
+		
+		return {
+			"anomalies": formatted_anomalies,
+			"active_count": active_count,
+			"total_count": len(formatted_anomalies),
+			"detection_time": datetime.now().isoformat()
+		}
+		
 	except Exception as exc:
 		logger.exception("Failed to get anomalies")
 		raise HTTPException(status_code=500, detail="Failed to retrieve anomalies") from exc
 
 
 @app.get("/anomalies/summary")
-async def get_anomalies_summary():
+async def get_anomalies_summary(db: Database = Depends(get_db)):
 	"""
-	Get a summary of current anomaly status.
+	Get a summary of current anomaly status from the database.
 	Returns active count, resolved count, and last detection time.
 	"""
 	try:
-		logger.info("Fetching anomaly summary...")
-		summary = await get_anomaly_summary()
-		return summary
+		logger.info("Fetching anomaly summary from database...")
+		
+		# Get counts from database
+		stats = db.execute("""
+			SELECT 
+				COUNT(*) as total_count,
+				SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_count,
+				SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) as resolved_count,
+				MAX(detected_at) as last_detection
+			FROM anomalies
+		""")
+		
+		if stats and len(stats) > 0:
+			stat = stats[0]
+			return {
+				"active_anomalies": stat['active_count'] or 0,
+				"resolved_anomalies": stat['resolved_count'] or 0,
+				"total_anomalies": stat['total_count'] or 0,
+				"last_detection": stat['last_detection'].isoformat() if stat['last_detection'] else datetime.now().isoformat()
+			}
+		else:
+			return {
+				"active_anomalies": 0,
+				"resolved_anomalies": 0,
+				"total_anomalies": 0,
+				"last_detection": datetime.now().isoformat()
+			}
+		
 	except Exception as exc:
 		logger.exception("Failed to get anomaly summary")
 		raise HTTPException(status_code=500, detail="Failed to retrieve anomaly summary") from exc
 
 
 @app.get("/anomalies/active")
-async def get_active_anomalies():
+async def get_active_anomalies(db: Database = Depends(get_db)):
 	"""
-	Get only active anomalies (excluding resolved ones).
+	Get only active anomalies (excluding resolved ones) from the database.
 	Useful for real-time monitoring dashboards.
 	"""
 	try:
-		logger.info("Fetching active anomalies...")
-		results = await detect_anomalies()
-		active_anomalies = [a for a in results['anomalies'] if a.get('status') == 'active']
+		logger.info("Fetching active anomalies from database...")
+		
+		# Get only active anomalies from database
+		anomalies = db.execute("""
+			SELECT 
+				id, anomaly_type, description, status, severity, device_id, 
+				icon, details, detected_at, resolved_at, created_at, updated_at
+			FROM anomalies 
+			WHERE status = 'active'
+			ORDER BY detected_at DESC
+		""")
+		
+		if not anomalies:
+			return {
+				"active_anomalies": [],
+				"active_count": 0,
+				"detection_time": datetime.now().isoformat()
+			}
+		
+		# Convert database results to the expected format
+		formatted_anomalies = []
+		
+		for anomaly in anomalies:
+			# Parse details JSON
+			details = {}
+			if anomaly['details']:
+				try:
+					details = json.loads(anomaly['details']) if isinstance(anomaly['details'], str) else anomaly['details']
+				except:
+					details = {}
+			
+			formatted_anomaly = {
+				"type": anomaly['anomaly_type'],
+				"description": anomaly['description'],
+				"status": anomaly['status'],
+				"severity": anomaly['severity'],
+				"device_id": anomaly['device_id'],
+				"icon": anomaly['icon'],
+				"details": details,
+				"timestamp": anomaly['detected_at'].isoformat() if anomaly['detected_at'] else None
+			}
+			
+			formatted_anomalies.append(formatted_anomaly)
 		
 		return {
-			"active_anomalies": active_anomalies,
-			"active_count": len(active_anomalies),
-			"detection_time": results['detection_time']
+			"active_anomalies": formatted_anomalies,
+			"active_count": len(formatted_anomalies),
+			"detection_time": datetime.now().isoformat()
 		}
+		
 	except Exception as exc:
 		logger.exception("Failed to get active anomalies")
 		raise HTTPException(status_code=500, detail="Failed to retrieve active anomalies") from exc
+
+
+@app.post("/anomalies/detect")
+async def run_anomaly_detection(db: Database = Depends(get_db)):
+	"""
+	Run anomaly detection and store results in the database.
+	This route performs the actual detection and caches results for fast retrieval.
+	"""
+	try:
+		logger.info("Running anomaly detection and storing results...")
+		
+		# Run the anomaly detection
+		results = await detect_anomalies()
+		
+		# Clear existing anomalies to avoid duplicates
+		db.execute("DELETE FROM anomalies")
+		
+		# Store each anomaly in the database
+		anomalies_stored = 0
+		for anomaly in results.get('anomalies', []):
+			try:
+				db.execute(
+					"""
+					INSERT INTO anomalies 
+					(anomaly_type, description, status, severity, device_id, icon, details, detected_at)
+					VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+					""",
+					(
+						anomaly.get('type', 'Unknown'),
+						anomaly.get('description', ''),
+						anomaly.get('status', 'active'),
+						anomaly.get('severity', 'medium'),
+						anomaly.get('device_id'),
+						anomaly.get('icon'),
+						json.dumps(anomaly.get('details', {})),
+						datetime.now()
+					)
+				)
+				anomalies_stored += 1
+			except Exception as e:
+				logger.warning(f"Failed to store anomaly: {e}")
+				continue
+		
+		logger.info(f"Stored {anomalies_stored} anomalies in database")
+		
+		return {
+			"message": "Anomaly detection completed and results stored",
+			"anomalies_stored": anomalies_stored,
+			"detection_time": results.get('detection_time'),
+			"total_detected": len(results.get('anomalies', []))
+		}
+		
+	except Exception as exc:
+		logger.exception("Failed to run anomaly detection")
+		raise HTTPException(status_code=500, detail="Failed to run anomaly detection") from exc
 

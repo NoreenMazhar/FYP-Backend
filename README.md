@@ -141,3 +141,36 @@ curl -X POST http://localhost:8000/query ^
   -H "Content-Type: application/json" ^
   -d '{"query":"List top 5 devices by error events this month"}'
 ```
+
+### 7) Anomaly Detection (Optimized)
+
+The system includes optimized anomaly detection with database caching for improved performance:
+
+#### Detection Routes
+
+- `POST /anomalies/detect` - Run anomaly detection and store results in database
+- `GET /anomalies` - Get all anomalies from database (fast)
+- `GET /anomalies/summary` - Get anomaly statistics from database (fast)
+- `GET /anomalies/active` - Get only active anomalies from database (fast)
+
+#### Performance Benefits
+
+- **Detection**: Run once and cache results (5-30 seconds)
+- **Retrieval**: Fast database queries (< 100ms)
+- **Concurrent requests**: Can handle many simultaneous requests
+- **Resource efficiency**: Low CPU/memory for retrieval requests
+
+#### Usage Example
+
+```powershell
+# Run detection and store results
+curl -X POST http://localhost:8000/anomalies/detect
+
+# Get all anomalies (fast)
+curl -X GET http://localhost:8000/anomalies
+
+# Get only active anomalies (fast)
+curl -X GET http://localhost:8000/anomalies/active
+```
+
+For detailed information about the anomaly detection optimization, see [ANOMALY_OPTIMIZATION_README.md](ANOMALY_OPTIMIZATION_README.md).

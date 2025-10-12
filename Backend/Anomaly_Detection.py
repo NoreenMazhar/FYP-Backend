@@ -316,27 +316,3 @@ async def get_anomaly_summary() -> Dict[str, Any]:
     """Get summary of current anomaly status."""
     return anomaly_detector.get_anomaly_summary()
 
-
-# Example usage for testing
-if __name__ == "__main__":
-    async def main():
-        logging.basicConfig(level=logging.INFO)
-        
-       
-        # Run comprehensive detection
-        results = await detect_anomalies()
-        
-        for i, anomaly in enumerate(results['anomalies'], 1):
-            icon_map = {
-                "checkmark": "✅",
-                "warning": "⚠️", 
-                "shield": "🛡️"
-            }
-            icon = icon_map.get(anomaly.get("icon", "shield"), "🛡️")
-            
-    
-        
-        # Get summary
-        summary = await get_anomaly_summary()
-    
-    asyncio.run(main())
