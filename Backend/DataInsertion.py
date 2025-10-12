@@ -96,13 +96,13 @@ def build_rows_for_insert(dataframe: pd.DataFrame) -> List[Tuple[str, str, str, 
     
     for idx, row in dataframe.iterrows():
         try:
-            local_timestamp = convert_cell_value(row[expected_columns['localTimestamp']])
-            device_name = convert_cell_value(row[expected_columns['deviceName']])
-            direction = convert_cell_value(row[expected_columns['direction']])
-            vehicle_type = convert_cell_value(row[expected_columns['vehicleType']])
-            vehicle_type_score = convert_cell_value(row[expected_columns['vehicleTypeScore']])
-            lp_ocr = convert_cell_value(row[expected_columns['lpOcr']])
-            ocr_score = convert_cell_value(row[expected_columns['ocrScore']])
+            local_timestamp = convert_cell_value(row['localTimestamp'])
+            device_name = convert_cell_value(row['deviceName'])
+            direction = convert_cell_value(row['direction'])
+            vehicle_type = convert_cell_value(row['vehicleType'])
+            vehicle_type_score = convert_cell_value(row['vehicleTypeScore'])
+            lp_ocr = convert_cell_value(row['lpOcr'])
+            ocr_score = convert_cell_value(row['ocrScore'])
             
             # Create the combined vehicle_types_lp_ocr field
             vehicle_types_lp_ocr = f"{vehicle_type_score} {lp_ocr}"
