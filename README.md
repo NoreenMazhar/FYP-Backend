@@ -32,8 +32,8 @@ From the repository root in Windows PowerShell:
 
 ```powershell
 cd Backend
-python -m venv venv
-venv/Scripts/Activate
+python3 -m venv venv
+source venv/bin/Activate
 pip install -r requirements.txt
 ```
 
@@ -42,15 +42,16 @@ pip install -r requirements.txt
 Set env vars so the backend can connect to the database and issue JWTs.
 
 ```powershell
-$env:DB_HOST = "127.0.0.1"
-$env:DB_PORT = "3306"
-$env:DB_USER = "FYP-USER"
-$env:DB_PASSWORD = "FYP-PASS"
-$env:DB_NAME = "FYP-DB"
+DB_HOST = "127.0.0.1"
+DB_PORT = "3306"
+DB_USER = "FYP-USER"
+DB_PASSWORD = "FYP-PASS"
+DB_NAME = "FYP-DB"
 
-$env:JWT_SECRET = "key"
-$env:JWT_EXPIRES_IN = "3600"   # seconds (1 hour)
-$env:JWT_PASS = "key"  # used as password hashing salt
+JWT_SECRET = "key"
+JWT_EXPIRES_IN = "3600"   # seconds (1 hour)
+JWT_PASS = "key"  # used as password hashing salt
+GOOGLE_API_KEY= <insert your API key here>
 ```
 
 Tips:
@@ -65,7 +66,7 @@ Inserting the excels into the database
 _Make sure to give proper path in the main_
 
 ```powershell
-python DataInsertion.py
+python3 DataInsertion.py
 ```
 
 Start the API (ensure the MySQL container is running and accepting connections):
@@ -83,7 +84,7 @@ On startup, the backend ensures a `users` table exists.
 ```powershell
 curl -X POST http://localhost:8000/auth/register ^
   -H "Content-Type: application/json" ^
-  -d '{"email":"a@b.com","password":"secret","full_name":"Alice"}'
+  -d '{"email":"a@b.com","password":"secret","display_name":"Alice"}'
 ```
 
 - Login:

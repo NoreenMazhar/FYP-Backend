@@ -1,6 +1,6 @@
 import os
 from fastapi import FastAPI, HTTPException, Depends, Query
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field, model_validator
 from db import Database
 from auth import hash_password, verify_password, create_jwt
 from dotenv import load_dotenv
@@ -28,7 +28,19 @@ app = FastAPI(title="FYP Backend")
 class RegisterRequest(BaseModel):
 	email: EmailStr
 	password: str
-	full_name: str | None = None
+	display_name: str | None = None
+	full_name: str | None = None  # For backward compatibility
+	user_type: str = Field(default="user", pattern="^(Streamer|admin|user)$")
+	
+	@model_validator(mode='after')
+	def validate_name_fields(self):
+		# Handle backward compatibility: if full_name is provided but display_name is not, use full_name
+		if self.full_name and not self.display_name:
+			self.display_name = self.full_name
+		# Ensure display_name is not None (required field)
+		if not self.display_name:
+			raise ValueError("Either display_name or full_name must be provided")
+		return self
 
 class LoginRequest(BaseModel):
 	email: EmailStr
@@ -60,10 +72,13 @@ def ensure_users_table(db: Database) -> None:
 		"""
 		CREATE TABLE IF NOT EXISTS users (
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
-			email VARCHAR(255) NOT NULL UNIQUE,
-			password_hash VARCHAR(255) NOT NULL,
-			full_name VARCHAR(255) NULL,
-			created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			email VARCHAR(255) UNIQUE NOT NULL,
+			display_name VARCHAR(120) NOT NULL,
+			user_type VARCHAR(16) NOT NULL CHECK (user_type IN ('Streamer','admin','user')),
+			password_hash TEXT NOT NULL,
+			is_active BOOLEAN NOT NULL DEFAULT TRUE,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 		"""
 	)
@@ -104,34 +119,40 @@ def on_startup():
 
 @app.post("/auth/register")
 def register(payload: RegisterRequest, db: Database = Depends(get_db)):
-	# check if user exists
-	logger.info(f"Registering user {payload.email}")
-	existing = db.execute("SELECT id FROM users WHERE email=%s", (payload.email,))
-	if existing:
-		logger.info(f"User {payload.email} already exists")
-		raise HTTPException(status_code=409, detail="User already exists")
+	try:
+		# check if user exists
+		logger.info(f"Registering user {payload.email}")
+		existing = db.execute("SELECT id FROM users WHERE email=%s", (payload.email,))
+		if existing:
+			logger.info(f"User {payload.email} already exists")
+			raise HTTPException(status_code=409, detail="User already exists")
 
-	password_hash = hash_password(payload.password)
-	logger.info(f"Hashing password for user {payload.email}")
-	db.execute(
-		"INSERT INTO users (email, password_hash, full_name) VALUES (%s, %s, %s)",
-		(payload.email, password_hash, payload.full_name),
-	)
-	user = db.execute("SELECT id, email, full_name FROM users WHERE email=%s", (payload.email,))
-	user = user[0]
-	token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
-	return {"access_token": token, "token_type": "bearer", "user": user}
+		password_hash = hash_password(payload.password)
+		logger.info(f"Hashing password for user {payload.email}")
+		db.execute(
+			"INSERT INTO users (email, password_hash, display_name, user_type) VALUES (%s, %s, %s, %s)",
+			(payload.email, password_hash, payload.display_name, payload.user_type),
+		)
+		user = db.execute("SELECT id, email, display_name, user_type FROM users WHERE email=%s", (payload.email,))
+		user = user[0]
+		token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
+		return {"access_token": token, "token_type": "bearer", "user": user}
+	except ValueError as ve:
+		raise HTTPException(status_code=422, detail=str(ve))
+	except Exception as e:
+		logger.exception(f"Registration failed for {payload.email}")
+		raise HTTPException(status_code=500, detail="Registration failed")
 
 @app.post("/auth/login")
 def login(payload: LoginRequest, db: Database = Depends(get_db)):
-	user = db.execute("SELECT id, email, full_name, password_hash FROM users WHERE email=%s", (payload.email,))
+	user = db.execute("SELECT id, email, display_name, user_type, password_hash FROM users WHERE email=%s", (payload.email,))
 	if not user:
 		raise HTTPException(status_code=401, detail="Invalid credentials")
 	user = user[0]
 	if not verify_password(payload.password, user["password_hash"]):
 		raise HTTPException(status_code=401, detail="Invalid credentials")
 	token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
-	return {"access_token": token, "token_type": "bearer", "user": {"id": user["id"], "email": user["email"], "full_name": user["full_name"]}}
+	return {"access_token": token, "token_type": "bearer", "user": {"id": user["id"], "email": user["email"], "display_name": user["display_name"], "user_type": user["user_type"]}}
 
 @app.get("/vehicle-detections", response_model=VehicleDetectionsResponse)
 def get_vehicle_detections(
