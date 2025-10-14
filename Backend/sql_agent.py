@@ -6,12 +6,8 @@ from sqlalchemy import create_engine, inspect, MetaData, text
 from collections import defaultdict
 
 import google.generativeai as genai
+from openai import OpenAI
 from langchain_community.utilities import SQLDatabase
-from langchain_community.agent_toolkits.sql.base import create_sql_agent
-from langchain.agents.agent_types import AgentType
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.agents import AgentExecutor
-from langchain.tools import Tool
 from langchain.agents.output_parsers import ReActSingleInputOutputParser
 from langchain.schema import AgentAction, AgentFinish
 
@@ -52,11 +48,136 @@ class CustomSQLOutputParser(ReActSingleInputOutputParser):
 
 
 def configure_gemini_from_env() -> None:
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if not api_key:
-        logger.warning("GOOGLE_API_KEY is not set; LLM features will be disabled.")
-        return
-    genai.configure(api_key=api_key)
+    # No-op (Gemini removed for SQL). Keeping for compatibility.
+    return
+
+
+def _get_ollama_client() -> OpenAI:
+    """Create an OpenAI-compatible client pointed at Ollama (CPU-only) for summarization.
+
+    Controlled via env:
+    - OLLAMA_BASE_URL: default "http://ollama:11434/v1" (docker), fallback to "http://localhost:11434/v1" if not set
+    - OLLAMA_API_KEY: not required by Ollama; use any placeholder
+    """
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434/v1")
+    api_key = os.getenv("OLLAMA_API_KEY", "ollama")
+    try:
+        return OpenAI(base_url=base_url, api_key=api_key)
+    except Exception:
+        # Fallback to localhost for local dev if service name not resolvable
+        return OpenAI(base_url="http://localhost:11434/v1", api_key=api_key)
+
+
+def _summarize_with_ollama(question: str, executed_sql: str, rows: list) -> dict:
+    """Use a lightweight CPU model via Ollama to turn SQL results into a user-facing answer.
+
+    Returns a parsed dict with keys matching the UI expectation.
+    """
+    if rows is None:
+        rows = []
+
+    # Build a compact preview (first N rows) to keep CPU latency low
+    max_preview_rows = int(os.getenv("SUMMARY_PREVIEW_ROWS", "30"))
+    preview_rows = rows[:max_preview_rows]
+
+    # Ensure JSON-serializable preview
+    try:
+        preview_json = json.dumps(preview_rows, ensure_ascii=False, default=str)
+    except Exception:
+        preview_json = json.dumps([], ensure_ascii=False)
+
+    client = _get_ollama_client()
+    model = os.getenv("OLLAMA_ANSWER_MODEL", "phi3.5:mini-instruct-q4_K_M")
+
+    system_prompt = (
+        "You are a precise data analyst. Answer ONLY using the provided SQL results. "
+        "If data is insufficient, say so. Keep the answer concise and structured."
+    )
+
+    user_prompt = (
+        f"Question:\n{question}\n\n"
+        f"Executed SQL:\n{executed_sql or 'N/A'}\n\n"
+        f"Row count: {len(rows)}\n"
+        f"Preview (JSON, first {len(preview_rows)} rows):\n{preview_json}\n\n"
+        "Return Markdown with sections: \n"
+        "### Overview\n- Direct answer in plain language.\n"
+        "### Key Findings\n- Bulleted numeric highlights.\n"
+        "### SQL Used\n```sql\n<the SQL used>\n```\n"
+        "### Observations\n- Short insights or caveats.\n"
+        "### Possible Questions\n- 3-5 follow-ups.\n"
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=int(os.getenv("SUMMARY_MAX_TOKENS", "400")),
+        )
+        text = resp.choices[0].message.content.strip()
+    except Exception as e:
+        logger.warning(f"Ollama summarization failed: {e}")
+        # Minimal fallback
+        text = (
+            "### Overview\n- Generated summary unavailable. Showing raw results preview.\n\n"
+            "### Key Findings\n- Rows returned: " + str(len(rows)) + "\n\n"
+            "### SQL Used\n```sql\n" + (executed_sql or "-- unknown") + "\n```\n\n"
+            "### Observations\n- Consider narrowing the query to fewer rows.\n\n"
+            "### Possible Questions\n- What timeframe matters?\n- Which devices?\n- What thresholds?\n"
+        )
+
+    return _parse_markdown_to_keyvalue(text)
+
+
+def _generate_sql_with_ollama(question: str, lc_db: SQLDatabase) -> str | None:
+    """Use a local code-focused model to generate safe SELECT-only SQL for MySQL.
+
+    Model/env:
+    - OLLAMA_SQL_MODEL: default "qwen2.5-coder:7b-q4_K_M"
+    """
+    client = _get_ollama_client()
+    model = os.getenv("OLLAMA_SQL_MODEL", "qwen2.5-coder:7b-q4_K_M")
+
+    # Provide compact table info to keep CPU latency reasonable
+    try:
+        table_info = lc_db.get_table_info()
+    except Exception:
+        table_info = ""
+
+    system_prompt = (
+        "You write safe, executable MySQL SQL.\n"
+        "Rules: Only SELECT; no DDL/DML; use valid columns; add LIMIT 100 unless specified;\n"
+        "Return ONLY SQL, no prose."
+    )
+    user_prompt = (
+        f"Schema:\n{table_info}\n\n"
+        f"Question:\n{question}\n\n"
+        "Return only one SQL statement (no Markdown)."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.0,
+            max_tokens=300,
+        )
+        sql_text = resp.choices[0].message.content.strip()
+        if not sql_text:
+            return None
+        # Basic guardrails
+        if not _is_safe_select(sql_text):
+            return None
+        return sql_text
+    except Exception as e:
+        logger.warning(f"Ollama SQL generation failed: {e}")
+        return None
 
 
 def _get_sqlalchemy_url_from_env() -> str:
@@ -602,7 +723,8 @@ def _is_database_related_query(question: str) -> tuple[bool, str]:
     # If no keywords found, use LLM for more sophisticated check
     if not has_keyword:
         try:
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+            # Gemini disabled; skip LLM validation on CPU-only
+            raise RuntimeError("skip-llm-validation")
             
             validation_prompt = f"""You are a database query validator. The database contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems with the following information:
 - Vehicle detections with timestamps (format: YYYY-MM-DD HH:MM:SS)
@@ -678,75 +800,31 @@ def run_data_raw_agent(question: str) -> dict:
     include_tables = get_tables_for_query(question, schema_info)
     use_device_scope = _is_device_query(question)
     
-    # Log the discovered schema for debugging
-    logger.info(f"Using tables: {include_tables}")
-    logger.info(f"Available table groups: {list(schema_info.get('table_groups', {}).keys())}")
     
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    # Gemini removed; we'll use local model for SQL generation
 
     enhanced_prompt = _build_prompt(question, use_device_scope, schema_info, include_tables)
 
     try:
-        # Try the standard agent first
-        agent_executor = create_sql_agent(
-            llm=llm,
-            db=lc_db,
-            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-            verbose=True,
-            handle_parsing_errors=True,
-            max_iterations=3,
-        )
+        # Try the standard agent first (Gemini to plan SQL)
+        executed_sql = _generate_sql_with_ollama(question, lc_db)
 
-        result = agent_executor.invoke({"input": enhanced_prompt})
-        output_text = result.get("output", "").strip()
-
-        # Extract executed SQL for debugging
-        executed_sql = None
-        for step in result.get("intermediate_steps", []):
-            if isinstance(step, tuple) and len(step) >= 2:
-                # Check both the action and observation for SQL
-                action = step[0] if len(step) > 0 else ""
-                observation = step[1] if len(step) > 1 else ""
-                
-                # Look for SQL in action
-                if isinstance(action, str) and "SELECT" in action.upper():
-                    executed_sql = action
-                    break
-                # Look for SQL in observation (sometimes the agent puts SQL there)
-                elif isinstance(observation, str) and "SELECT" in observation.upper():
-                    # Extract SQL from observation if it contains SQL
-                    lines = observation.split('\n')
-                    for line in lines:
-                        if "SELECT" in line.upper():
-                            executed_sql = line.strip()
-                            break
-                    if executed_sql:
-                        break
-        
-        # If no SQL found in intermediate steps, try to extract from output text
-        if not executed_sql:
-            executed_sql = _extract_sql_from_text(output_text)
-        
-        # If we found SQL but it wasn't executed, try to execute it directly
-        if executed_sql and not any("Observation:" in str(step) for step in result.get("intermediate_steps", [])):
+        # Execute SQL ourselves to obtain rows for summarization
+        sql_results = []
+        if executed_sql:
             try:
-                logger.info(f"Executing SQL directly: {executed_sql}")
+                logger.info(f"Executing SQL: {executed_sql}")
                 sql_results, sql_error = _execute_sql_safely(lc_db, executed_sql)
                 if sql_error:
-                    logger.warning(f"Direct SQL execution failed: {sql_error}")
-                else:
-                    logger.info(f"Direct SQL execution successful, returned {len(sql_results)} results")
-                    # Add the results to the output text if it's not already there
-                    if "Observation:" not in output_text:
-                        output_text += f"\n\nObservation: {sql_results}"
+                    logger.warning(f"SQL execution failed: {sql_error}")
             except Exception as e:
-                logger.warning(f"Direct SQL execution error: {e}")
+                logger.warning(f"SQL execution error: {e}")
 
-        # Parse markdown result into key-value pairs
-        parsed_result = _parse_markdown_to_keyvalue(output_text)
-        
+        # Summarize via Ollama model
+        parsed_result = _summarize_with_ollama(question, executed_sql, sql_results)
+
         return {
             "question": question,
             "executed_sql": executed_sql,
@@ -782,76 +860,20 @@ def run_data_raw_agent(question: str) -> dict:
                             "extracted_from_error": True,
                         }
         
-        # Fallback: Use direct LLM call with structured prompt
+        # Fallback: regenerate SQL with local model and summarize
         try:
-            fallback_prompt = f"""
-You are a SQL expert. Given the following database schema and question, generate a SQL query and provide a structured response.
+            executed_sql = _generate_sql_with_ollama(question, lc_db)
+            sql_results = []
+            if executed_sql:
+                try:
+                    sql_results, sql_error = _execute_sql_safely(lc_db, executed_sql)
+                    if sql_error:
+                        logger.warning(f"SQL execution failed: {sql_error}")
+                except Exception as sql_exec_error:
+                    logger.warning(f"SQL execution error: {sql_exec_error}")
 
-Database Schema:
-{lc_db.get_table_info()}
+            parsed_result = _summarize_with_ollama(question, executed_sql, sql_results)
 
-Question: {question}
-
-IMPORTANT DATA STRUCTURE NOTES:
-- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)
-- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) for type score
-- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) for license plate
-- Device names: Device-A1, Device-B3, Device-C2, etc.
-- Vehicle types: Car, Truck, Bus, Motorcycle
-- Directions: Inbound, Outbound
-- OCR scores: 0.0-1.0 (decimal) or 0-100 (percentage)
-- Type scores: 0.0-1.0 (decimal from vehicle_types_lp_ocr)
-
-Please provide your response in the following format:
-
-### Overview
-- [Brief answer to the question]
-
-### Key Findings  
-- [Important numbers, trends, or comparisons]
-
-### SQL Used
-```sql
-[Your SQL query here]
-```
-
-### Observations
-- [Short insights or anomalies worth noting]
-
-### Next Steps
-- [2-3 concise suggestions for follow-up analysis]
-
-### Possible Questions
-- [List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings]
-
-Important: Only use SELECT statements. Do not modify data.
-"""
-            
-            # Direct LLM call as fallback
-            response = llm.invoke(fallback_prompt)
-            output_text = response.content.strip()
-            
-            # Try to extract SQL from the response
-            executed_sql = None
-            if "```sql" in output_text:
-                start = output_text.find("```sql") + 6
-                end = output_text.find("```", start)
-                if end > start:
-                    executed_sql = output_text[start:end].strip()
-                    
-                    # Try to execute the SQL to verify it works
-                    try:
-                        sql_results, sql_error = _execute_sql_safely(lc_db, executed_sql)
-                        if sql_error:
-                            logger.warning(f"SQL execution failed: {sql_error}")
-                        else:
-                            logger.info(f"SQL executed successfully, returned {len(sql_results)} results")
-                    except Exception as sql_exec_error:
-                        logger.warning(f"SQL execution error: {sql_exec_error}")
-            
-            # Parse markdown result into key-value pairs
-            parsed_result = _parse_markdown_to_keyvalue(output_text)
-            
             return {
                 "question": question,
                 "executed_sql": executed_sql,

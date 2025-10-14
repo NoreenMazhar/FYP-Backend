@@ -1,0 +1,53 @@
+version: "3.9"
+
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: FYP-DB
+      MYSQL_USER: FYP-USER
+      MYSQL_PASSWORD: FYP-PASS
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./SQL:/docker-entrypoint-initdb.d
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # CPU-only; no GPUs attached
+
+  backend:
+    build:
+      context: .
+      dockerfile: Backend/Dockerfile
+    environment:
+      # Database
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: FYP-DB
+      DB_USER: FYP-USER
+      DB_PASSWORD: FYP-PASS
+      # Ollama OpenAI-compatible endpoint
+      OLLAMA_BASE_URL: http://ollama:11434/v1
+      OLLAMA_ANSWER_MODEL: phi3.5:mini-instruct-q4_K_M
+      OLLAMA_SQL_MODEL: qwen2.5-coder:7b-q4_K_M
+      SUMMARY_PREVIEW_ROWS: 30
+      SUMMARY_MAX_TOKENS: 400
+    depends_on:
+      - db
+      - ollama
+    ports:
+      - "8000:8000"
+
+volumes:
+  db_data:
+  ollama_data:
+
+

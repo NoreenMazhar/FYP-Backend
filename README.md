@@ -2,82 +2,80 @@
 
 ### Overview
 
-This project provides a MySQL database (via Docker) and a FastAPI backend with user registration and login that returns a JWT.
+This project provides a complete Docker-based setup with MySQL database, FastAPI backend, and local AI models (Ollama) for SQL generation and answer summarization. No external API keys required - everything runs locally on CPU.
 
 ### Prerequisites
 
-- Docker and Docker Engine running
-- Python 3.10+ installed
+- Docker and Docker Compose installed
+- At least 8GB RAM (for running local AI models)
+- 10GB+ free disk space (for AI models)
 
-### 1) Build and run MySQL with Docker
+### Quick Start (Recommended)
 
-From the repository root (so `SQL/*.sql` are in build context):
-
-```powershell
-docker build -t fyp-mysql .
-```
+Run database and AI models in Docker, backend locally:
 
 ```powershell
-docker run --name fyp-mysql -e MYSQL_ROOT_PASSWORD=rootpass -e MYSQL_DATABASE=FYP-DB -e MYSQL_USER=FYP-USER -e MYSQL_PASSWORD=FYP-PASS -p 3306:3306 -v fyp_mysql_data:/var/lib/mysql fyp-mysql
-```
+# 1. Start only MySQL and Ollama in Docker
+docker compose up -d db ollama
 
-Notes:
+# 2. Pull the required AI models
+docker exec -it ollama ollama pull qwen2.5-coder:7b-q4_K_M
+docker exec -it ollama ollama pull phi3.5:mini-instruct-q4_K_M
 
-- All `.sql` files in `SQL/` run automatically on first startup (empty data dir); they run in alphabetical order.
-- If you need to re-run init scripts, remove the volume or use a new one: `docker volume rm fyp_mysql_data`.
-
-### 2) Create virtual environment and install dependencies
-
-From the repository root in Windows PowerShell:
-
-```powershell
+# 3. Set up Python environment and run backend locally
 cd Backend
-python3 -m venv venv
-source venv/bin/Activate
+python -m venv venv
+# Windows:
+venv\Scripts\activate
+# Linux/Mac:
+source venv/bin/activate
+
 pip install -r requirements.txt
-```
 
-### 3) Configure environment variables
+# 4. Set environment variables
+set DB_HOST=localhost
+set DB_PORT=3306
+set DB_USER=FYP-USER
+set DB_PASSWORD=FYP-PASS
+set DB_NAME=FYP-DB
+set OLLAMA_BASE_URL=http://localhost:11434/v1
+set OLLAMA_SQL_MODEL=qwen2.5-coder:7b-q4_K_M
+set OLLAMA_ANSWER_MODEL=phi3.5:mini-instruct-q4_K_M
 
-Set env vars so the backend can connect to the database and issue JWTs.
+# 5. Insert sample data (optional)
+python DataInsertion.py
 
-```powershell
-DB_HOST = "127.0.0.1"
-DB_PORT = "3306"
-DB_USER = "FYP-USER"
-DB_PASSWORD = "FYP-PASS"
-DB_NAME = "FYP-DB"
-
-JWT_SECRET = "key"
-JWT_EXPIRES_IN = "3600"   # seconds (1 hour)
-JWT_PASS = "key"  # used as password hashing salt
-GOOGLE_API_KEY= <insert your API key here>
-```
-
-Tips:
-
-- `DB_*` variables are used by the backend. They also fall back to `MYSQL_*` if set in your container environment.
-- Change `JWT_SECRET` and `JWT_PASS` to secure values for non-development use.
-
-### 4) Run the FastAPI backend
-
-Inserting the excels into the database
-
-_Make sure to give proper path in the main_
-
-```powershell
-python3 DataInsertion.py
-```
-
-Start the API (ensure the MySQL container is running and accepting connections):
-
-```powershell
+# 6. Run the backend
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-On startup, the backend ensures a `users` table exists.
+### Services
 
-### 5) Test the endpoints
+- **MySQL Database**: `localhost:3306` (FYP-DB) - Docker
+- **Ollama AI Models**: `http://localhost:11434` (OpenAI-compatible API) - Docker
+- **FastAPI Backend**: `http://localhost:8000` - Local Python
+
+### Alternative: Full Docker Setup
+
+If you prefer everything in Docker:
+
+```powershell
+# Start all services including backend
+docker compose up -d
+
+# Pull models
+docker exec -it ollama ollama pull qwen2.5-coder:7b-q4_K_M
+docker exec -it ollama ollama pull phi3.5:mini-instruct-q4_K_M
+
+# Insert sample data
+docker exec -it backend python DataInsertion.py
+```
+
+**Note**: The backend will be available at `http://localhost:8000` but you won't have hot-reload for development.
+
+### Testing the Setup
+
+#### 1) Test Authentication
 
 - Register:
 
@@ -97,53 +95,70 @@ curl -X POST http://localhost:8000/auth/login ^
 
 A successful response returns an `access_token` (JWT) and basic user info.
 
-### 6) Query endpoint (LLM-assisted SQL)
+#### 2) Test AI-Powered Query Endpoint
 
 Route: `POST /query`
 
-- Purpose: Natural language questions are translated to SQL and executed against the database.
-- Table scope behavior:
-  - If the question is about devices (e.g., mentions "device", "camera", "firmware", "telemetry", etc.), the agent queries only device tables like `devices`, `device_models`, `device_streams`, `device_health`, and related.
-  - Otherwise, it queries only the `data_raw` table and uses MySQL JSON functions for fields inside `row_data`.
-- Output is a structured Markdown answer with sections: Overview, Key Findings, SQL Used, Observations, In-Depth Analysis (when warranted), Next Steps.
-
-Requirements:
-
-- Environment variable `GOOGLE_API_KEY` must be set (Gemini). If not set, LLM features are disabled.
+- **Purpose**: Natural language questions are translated to SQL using local AI models and executed against the database.
+- **AI Models Used**:
+  - **SQL Generation**: `qwen2.5-coder:7b-q4_K_M` (code-focused model for SQL)
+  - **Answer Summarization**: `phi3.5:mini-instruct-q4_K_M` (lightweight model for responses)
+- **No External APIs**: Everything runs locally on CPU
 
 Request body:
 
 ```json
 {
-  "query": "Which camera models have the most offline events in the last 7 days?"
+  "query": "How many vehicles were detected by Device-A1 yesterday?"
 }
 ```
 
 Response body (example):
 
-````json
+```json
 {
-  "question": "Which camera models have the most offline events in the last 7 days?",
-  "executed_sql": "SELECT ...",
-  "result": "### Overview\n- ... structured answer ...\n### Key Findings\n- ...\n### SQL Used\n```sql\nSELECT ...\n```\n### Observations\n- ...\n### In-Depth Analysis (when requested or warranted)\n- ...\n### Next Steps\n- ...",
-  "used_device_scope": true
+  "question": "How many vehicles were detected by Device-A1 yesterday?",
+  "executed_sql": "SELECT COUNT(*) FROM data_raw WHERE device_name = 'Device-A1' AND DATE(local_timestamp) = CURDATE() - INTERVAL 1 DAY",
+  "result": {
+    "Overview": "Device-A1 detected 15 vehicles yesterday",
+    "Key Findings": "- Total detections: 15\n- Device: Device-A1\n- Date: Yesterday",
+    "SQL Used": "SELECT COUNT(*) FROM data_raw WHERE device_name = 'Device-A1' AND DATE(local_timestamp) = CURDATE() - INTERVAL 1 DAY",
+    "Observations": "This shows the daily traffic volume for Device-A1",
+    "Possible Questions": [
+      "What was the busiest hour?",
+      "Which vehicle types were most common?",
+      "How does this compare to other devices?"
+    ]
+  },
+  "used_device_scope": false
 }
-````
-
-Notes:
-
-- `used_device_scope` indicates whether the device schema was used. If `false`, the query was answered from `data_raw`.
-- `executed_sql` may be `null` if the agent didn’t need to run a final SQL statement (rare) or if it couldn’t be extracted.
-
-Example call (PowerShell):
-
-```powershell
-curl -X POST http://localhost:8000/query ^
-  -H "Content-Type: application/json" ^
-  -d '{"query":"List top 5 devices by error events this month"}'
 ```
 
-### 7) Anomaly Detection (Optimized)
+Example calls (PowerShell):
+
+```powershell
+# Vehicle detection query
+curl -X POST http://localhost:8000/query ^
+  -H "Content-Type: application/json" ^
+  -d '{"query":"Show me all trucks detected in the last hour"}'
+
+# Device performance query
+curl -X POST http://localhost:8000/query ^
+  -H "Content-Type: application/json" ^
+  -d '{"query":"Which devices have the highest OCR confidence scores?"}'
+```
+
+#### 3) Check AI Model Status
+
+```powershell
+# List available models in Ollama
+curl http://localhost:11434/api/tags
+
+# Test Ollama directly
+curl http://localhost:11434/api/chat -d '{"model":"phi3.5:mini-instruct-q4_K_M","messages":[{"role":"user","content":"Hello"}]}'
+```
+
+### Anomaly Detection (Optimized)
 
 The system includes optimized anomaly detection with database caching for improved performance:
 
@@ -154,31 +169,9 @@ The system includes optimized anomaly detection with database caching for improv
 - `GET /anomalies/summary` - Get anomaly statistics from database (fast)
 - `GET /anomalies/active` - Get only active anomalies from database (fast)
 
-#### Performance Benefits
-
-- **Detection**: Run once and cache results (5-30 seconds)
-- **Retrieval**: Fast database queries (< 100ms)
-- **Concurrent requests**: Can handle many simultaneous requests
-- **Resource efficiency**: Low CPU/memory for retrieval requests
-
-#### Usage Example
-
-```powershell
-# Run detection and store results
-curl -X POST http://localhost:8000/anomalies/detect
-
-# Get all anomalies (fast)
-curl -X GET http://localhost:8000/anomalies
-
-# Get only active anomalies (fast)
-curl -X GET http://localhost:8000/anomalies/active
-```
-
-For detailed information about the anomaly detection optimization, see [ANOMALY_OPTIMIZATION_README.md](ANOMALY_OPTIMIZATION_README.md).
-
 ### Automatic Schema Discovery
 
-The SQL agent now automatically discovers database tables and their relationships instead of using hardcoded table lists. This makes the system more flexible and adaptable to schema changes.
+The SQL agent automatically discovers database tables and their relationships instead of using hardcoded table lists. This makes the system more flexible and adaptable to schema changes.
 
 #### Key Features
 
@@ -201,23 +194,29 @@ curl http://localhost:8000/schema?summary_only=true
 
 1. **Schema Discovery**: On first query, the system inspects the database to discover all tables and relationships
 2. **Table Selection**: For each query, the agent intelligently selects relevant tables based on keywords and relationships
-3. **Query Generation**: The LLM generates SQL using only the selected tables with full schema context
+3. **Query Generation**: The local AI model generates SQL using only the selected tables with full schema context
 4. **Relationship Awareness**: Foreign key relationships are included in the prompt to help with joins
 
-#### Testing Schema Discovery
-
-Run the test script to see the schema discovery in action:
+### Stopping the Services
 
 ```powershell
-cd Backend
-python test_schema_discovery.py
+# Stop Docker services (MySQL + Ollama)
+docker compose down
+
+# Stop and remove volumes (WARNING: deletes all data)
+docker compose down -v
+
+# View logs
+docker compose logs ollama
+docker compose logs db
+
+# Stop local backend: Ctrl+C in the terminal running uvicorn
 ```
 
-This will display:
+### Development Workflow
 
-- All discovered tables and their relationships
-- Table groupings by domain
-- Intelligent table selection examples
-- Detailed information about key tables
-
-For detailed information about the schema discovery feature, see [SCHEMA_DISCOVERY.md](SCHEMA_DISCOVERY.md).
+1. **Start services**: `docker compose up -d db ollama`
+2. **Pull models**: Run the ollama pull commands once
+3. **Develop backend**: Run `uvicorn main:app --reload` locally for hot-reload
+4. **Test changes**: Backend automatically restarts when you save files
+5. **Stop services**: `docker compose down` when done
