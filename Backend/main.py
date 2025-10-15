@@ -6,7 +6,7 @@ from auth import hash_password, verify_password, create_jwt
 from dotenv import load_dotenv
 import logging
 import json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import List, Optional
 from sql_agent import (
 	configure_gemini_from_env,
@@ -15,6 +15,7 @@ from sql_agent import (
 	get_schema_summary,
 )
 from Anomaly_Detection import detect_anomalies, get_anomaly_summary
+from plots import get_2d_plots_via_agent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -118,6 +119,24 @@ def on_startup():
 	ensure_users_table(db)
 	ensure_anomalies_table(db)
 	configure_gemini_from_env()
+
+
+@app.get("/plots")
+def get_2d_plots(
+		start_date: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
+		end_date: Optional[date] = Query(None, description="End date (YYYY-MM-DD)"),
+		device: Optional[str] = Query(None, description="Filter by device name"),
+		vehicle_type: Optional[str] = Query(None, description="Filter by vehicle type"),
+		db: Database = Depends(get_db)
+	):
+	"""
+	Return multiple 2D-ready datasets using the SQL Agent for query generation.
+	"""
+	try:
+		return get_2d_plots_via_agent(start_date, end_date, device, vehicle_type, db)
+	except Exception as exc:
+		logger.exception("Failed to generate 2D plots via agent")
+		raise HTTPException(status_code=500, detail="Failed to generate 2D plots") from exc
 
 @app.post("/auth/register")
 def register(payload: RegisterRequest, db: Database = Depends(get_db)):

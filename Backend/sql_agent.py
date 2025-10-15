@@ -602,7 +602,7 @@ def _is_database_related_query(question: str) -> tuple[bool, str]:
     # If no keywords found, use LLM for more sophisticated check
     if not has_keyword:
         try:
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+            llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
             
             validation_prompt = f"""You are a database query validator. The database contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems with the following information:
 - Vehicle detections with timestamps (format: YYYY-MM-DD HH:MM:SS)
@@ -684,7 +684,7 @@ def run_data_raw_agent(question: str) -> dict:
     
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0)
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
 
     enhanced_prompt = _build_prompt(question, use_device_scope, schema_info, include_tables)
 
@@ -696,7 +696,7 @@ def run_data_raw_agent(question: str) -> dict:
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             verbose=True,
             handle_parsing_errors=True,
-            max_iterations=3,
+            max_iterations=30,
         )
 
         result = agent_executor.invoke({"input": enhanced_prompt})
@@ -746,6 +746,12 @@ def run_data_raw_agent(question: str) -> dict:
 
         # Parse markdown result into key-value pairs
         parsed_result = _parse_markdown_to_keyvalue(output_text)
+        # Fallback: if the model didn't follow the heading format, preserve the raw text
+        if not parsed_result:
+            if output_text:
+                parsed_result = {"Overview": output_text}
+            else:
+                parsed_result = {"Overview": "No answer was produced by the SQL agent."}
         
         return {
             "question": question,
@@ -851,6 +857,11 @@ Important: Only use SELECT statements. Do not modify data.
             
             # Parse markdown result into key-value pairs
             parsed_result = _parse_markdown_to_keyvalue(output_text)
+            if not parsed_result:
+                if output_text:
+                    parsed_result = {"Overview": output_text}
+                else:
+                    parsed_result = {"Overview": "No answer was produced by the SQL agent."}
             
             return {
                 "question": question,
@@ -895,3 +906,69 @@ Important: Only use SELECT statements. Do not modify data.
                 "used_device_scope": use_device_scope,
                 "error": True,
             }
+
+
+def generate_sql_for_question(question: str) -> str | None:
+    """
+    Use the SQL agent to generate a single final SQL query string for the question.
+    Returns the SQL string if extracted, otherwise None.
+    """
+    configure_gemini_from_env()
+
+    # Discover schema and set scope
+    schema_info = discover_database_schema()
+    include_tables = get_tables_for_query(question, schema_info)
+    lc_db = get_lc_sql_db(include_tables)
+
+    llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
+
+    enhanced_prompt = _build_prompt(question, _is_device_query(question), schema_info, include_tables)
+
+    try:
+        agent_executor = create_sql_agent(
+            llm=llm,
+            db=lc_db,
+            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
+            verbose=False,
+            handle_parsing_errors=True,
+            max_iterations=30,
+        )
+        result = agent_executor.invoke({"input": enhanced_prompt})
+        output_text = result.get("output", "").strip()
+
+        executed_sql = None
+        for step in result.get("intermediate_steps", []):
+            if isinstance(step, tuple) and len(step) >= 2:
+                action = step[0]
+                observation = step[1]
+                if isinstance(action, str) and "SELECT" in action.upper():
+                    executed_sql = action
+                    break
+                if isinstance(observation, str) and "SELECT" in observation.upper():
+                    lines = observation.split('\n')
+                    for line in lines:
+                        if line.strip().upper().startswith("SELECT "):
+                            executed_sql = line.strip()
+                            break
+                    if executed_sql:
+                        break
+
+        if not executed_sql:
+            executed_sql = _extract_sql_from_text(output_text)
+
+        # Fallback: direct LLM prompt for SQL only
+        if not executed_sql:
+            sql_only_prompt = (
+                "Return ONLY a single valid MySQL SELECT statement that answers the question. "
+                "No commentary."
+                f"\n\nSchema Info (tables you may use): {', '.join(include_tables)}\n\nQuestion: {question}"
+            )
+            response = llm.invoke(sql_only_prompt)
+            text = response.content.strip()
+            executed_sql = _extract_sql_from_text(text) or (text if text.strip().upper().startswith("SELECT ") else None)
+
+        return executed_sql
+
+    except Exception as e:
+        logger.warning(f"generate_sql_for_question failed: {e}")
+        return None
