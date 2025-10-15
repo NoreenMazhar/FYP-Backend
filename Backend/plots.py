@@ -1,4 +1,5 @@
 import logging
+import json
 from datetime import date, timedelta
 from typing import Optional
 
@@ -167,10 +168,43 @@ def get_2d_plots_via_agent(
 		device: Optional[str],
 		vehicle_type: Optional[str],
 		db: Database,
+		created_by: Optional[int] = None,
 ):
-	# db is accepted for signature compatibility with the route, but not needed
-	# because the SQL agent and internal executor manage connections via Database singleton.
-	return generate_2d_plots(start_date, end_date, device, vehicle_type)
+	# Generate plots via agent
+	plots = generate_2d_plots(start_date, end_date, device, vehicle_type)
+
+	# Optionally persist each plot as a visualization
+	if created_by is not None:
+		conn = Database.get_instance()
+		for plot in plots:
+			try:
+				viz_type = str(plot.get("Type of Plot") or "chart").lower()
+				title = str(plot.get("Title") or "Visualization")
+				config = {
+					"type": plot.get("Type of Plot"),
+					"x": plot.get("X", []),
+					"y": plot.get("Y", []),
+					"description": plot.get("Description", ""),
+					"filters": {
+						"start_date": start_date.isoformat() if start_date else None,
+						"end_date": end_date.isoformat() if end_date else None,
+						"device": device,
+						"vehicle_type": vehicle_type,
+					},
+				}
+				conn.execute(
+					"INSERT INTO visualizations (title, viz_type, config, created_by) VALUES (%s, %s, %s, %s)",
+					(
+						title,
+						viz_type,
+						json.dumps(config),
+						int(created_by),
+					),
+				)
+			except Exception as e:
+				logger.warning(f"Failed to persist visualization: {e}")
+
+	return plots
 
 import logging
 from datetime import date, timedelta

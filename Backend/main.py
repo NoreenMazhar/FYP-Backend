@@ -119,21 +119,35 @@ def on_startup():
 	ensure_users_table(db)
 	ensure_anomalies_table(db)
 	configure_gemini_from_env()
+	# Ensure visualizations table exists (aligns with SQL/basic.sql)
+	db.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS visualizations (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			title VARCHAR(255) NOT NULL,
+			viz_type VARCHAR(64) NOT NULL,
+			config JSON NOT NULL,
+			created_by BIGINT NOT NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		"""
+	)
 
 
-@app.get("/plots")
+@app.get("/plots/2d")
 def get_2d_plots(
 		start_date: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
 		end_date: Optional[date] = Query(None, description="End date (YYYY-MM-DD)"),
 		device: Optional[str] = Query(None, description="Filter by device name"),
 		vehicle_type: Optional[str] = Query(None, description="Filter by vehicle type"),
-		db: Database = Depends(get_db)
+		db: Database = Depends(get_db),
+		created_by: Optional[int] = Query(None, description="If provided, save visualizations under this user id")
 	):
 	"""
 	Return multiple 2D-ready datasets using the SQL Agent for query generation.
 	"""
 	try:
-		return get_2d_plots_via_agent(start_date, end_date, device, vehicle_type, db)
+		return get_2d_plots_via_agent(start_date, end_date, device, vehicle_type, db, created_by)
 	except Exception as exc:
 		logger.exception("Failed to generate 2D plots via agent")
 		raise HTTPException(status_code=500, detail="Failed to generate 2D plots") from exc
