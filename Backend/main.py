@@ -9,7 +9,7 @@ import json
 from datetime import datetime, date, timedelta
 from typing import List, Optional
 from sql_agent import (
-	configure_gemini_from_env,
+	configure_openrouter_from_env,
 	run_data_raw_agent,
 	discover_database_schema,
 	get_schema_summary,
@@ -118,7 +118,7 @@ def on_startup():
 	db = Database.get_instance()
 	ensure_users_table(db)
 	ensure_anomalies_table(db)
-	configure_gemini_from_env()
+	configure_openrouter_from_env()
 	# Ensure visualizations table exists (aligns with SQL/basic.sql)
 	db.execute(
 		"""

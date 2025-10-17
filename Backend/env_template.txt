@@ -1,0 +1,22 @@
+OPENROUTER_API_KEY=your_openrouter_api_key_here
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=FYP-DB
+DB_USER=FYP-USER
+DB_PASSWORD=FYP-PASS
+
+# Alternative MySQL configuration (for compatibility)
+MYSQL_DATABASE=FYP-DB
+MYSQL_USER=FYP-USER
+MYSQL_PASSWORD=FYP-PASS
+
+# JWT Configuration
+JWT_SECRET=your_jwt_secret_key_here
+JWT_EXPIRES_IN=3600
+
+# Application Configuration
+DEBUG=False
+

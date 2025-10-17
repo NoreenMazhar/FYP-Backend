@@ -5,11 +5,10 @@ from typing import Any
 from sqlalchemy import create_engine, inspect, MetaData, text
 from collections import defaultdict
 
-import google.generativeai as genai
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain.agents.agent_types import AgentType
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain.agents import AgentExecutor
 from langchain.tools import Tool
 from langchain.agents.output_parsers import ReActSingleInputOutputParser
@@ -51,12 +50,50 @@ class CustomSQLOutputParser(ReActSingleInputOutputParser):
             )
 
 
-def configure_gemini_from_env() -> None:
-    api_key = os.getenv("GOOGLE_API_KEY")
+def configure_openrouter_from_env() -> None:
+    """
+    Configure OpenRouter API settings from environment variables.
+    Required environment variables:
+    - OPENROUTER_API_KEY: Your OpenRouter API key
+    Optional environment variables:
+    - OPENROUTER_BASE_URL: OpenRouter base URL (default: https://openrouter.ai/api/v1)
+    - YOUR_SITE_URL: Your site URL for rankings on openrouter.ai
+    - YOUR_SITE_NAME: Your site name for rankings on openrouter.ai
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
-        logger.warning("GOOGLE_API_KEY is not set; LLM features will be disabled.")
+        logger.warning("OPENROUTER_API_KEY is not set; LLM features will be disabled.")
         return
-    genai.configure(api_key=api_key)
+    logger.info("OpenRouter API configured successfully")
+
+
+def _get_openrouter_llm(temperature: float = 0) -> ChatOpenAI:
+    """
+    Create and return a ChatOpenAI instance configured for OpenRouter.
+    Uses DeepSeek model by default.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    site_url = os.getenv("YOUR_SITE_URL", "")
+    site_name = os.getenv("YOUR_SITE_NAME", "")
+    
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY environment variable is not set")
+    
+    # Create default headers
+    default_headers = {}
+    if site_url:
+        default_headers["HTTP-Referer"] = site_url
+    if site_name:
+        default_headers["X-Title"] = site_name
+    
+    return ChatOpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        model="google/gemma-3n-e2b-it:free",
+        temperature=temperature,
+        default_headers=default_headers
+    )
 
 
 def _get_sqlalchemy_url_from_env() -> str:
@@ -602,7 +639,7 @@ def _is_database_related_query(question: str) -> tuple[bool, str]:
     # If no keywords found, use LLM for more sophisticated check
     if not has_keyword:
         try:
-            llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
+            llm = _get_openrouter_llm(temperature=0)
             
             validation_prompt = f"""You are a database query validator. The database contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems with the following information:
 - Vehicle detections with timestamps (format: YYYY-MM-DD HH:MM:SS)
@@ -649,12 +686,12 @@ Your answer:"""
 
 
 def run_data_raw_agent(question: str) -> dict:
-    """End-to-end: use LangChain SQL Agent (Gemini) to generate, run, and summarize SQL.
+    """End-to-end: use LangChain SQL Agent (OpenRouter/DeepSeek) to generate, run, and summarize SQL.
 
     Uses automatic schema discovery to determine relevant tables dynamically.
     First checks if the question is database-related before processing.
     """
-    configure_gemini_from_env()
+    configure_openrouter_from_env()
     
     # Check if question is database-related
     is_related, rejection_reason = _is_database_related_query(question)
@@ -684,7 +721,7 @@ def run_data_raw_agent(question: str) -> dict:
     
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
+    llm = _get_openrouter_llm(temperature=0)
 
     enhanced_prompt = _build_prompt(question, use_device_scope, schema_info, include_tables)
 
@@ -913,14 +950,14 @@ def generate_sql_for_question(question: str) -> str | None:
     Use the SQL agent to generate a single final SQL query string for the question.
     Returns the SQL string if extracted, otherwise None.
     """
-    configure_gemini_from_env()
+    configure_openrouter_from_env()
 
     # Discover schema and set scope
     schema_info = discover_database_schema()
     include_tables = get_tables_for_query(question, schema_info)
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = ChatGoogleGenerativeAI(model="gemini-2.5-pro", temperature=0)
+    llm = _get_openrouter_llm(temperature=0)
 
     enhanced_prompt = _build_prompt(question, _is_device_query(question), schema_info, include_tables)
 

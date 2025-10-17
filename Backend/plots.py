@@ -65,11 +65,11 @@ def _rows_to_xy(rows: list[dict]) -> tuple[list, list]:
 
 
 def generate_2d_plots(
-		start_date: Optional[date],
-		end_date: Optional[date],
-		device: Optional[str],
-		vehicle_type: Optional[str],
-):
+			start_date: Optional[date],
+			end_date: Optional[date],
+			device: Optional[str],
+			vehicle_type: Optional[str],
+	):
 	"""
 	Generate multiple 2D plot datasets by asking the SQL agent to produce SQL.
 	Returns a list of plot objects in the specified JSON format.
