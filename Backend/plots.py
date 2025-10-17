@@ -64,6 +64,18 @@ def _rows_to_xy(rows: list[dict]) -> tuple[list, list]:
 	return x_vals, y_vals
 
 
+def _sanitize_x_labels(x_vals: list) -> list:
+	"""Normalize X labels: replace blanks/None/NaN-like with 'Unknown'."""
+	cleaned: list[str] = []
+	for x in x_vals:
+		label = "" if x is None else str(x).strip()
+		if label == "" or label.lower() in {"none", "null", "nan"}:
+			cleaned.append("Unknown")
+		else:
+			cleaned.append(label)
+	return cleaned
+
+
 def generate_2d_plots(
 			start_date: Optional[date],
 			end_date: Optional[date],
@@ -88,11 +100,13 @@ def generate_2d_plots(
 	try:
 		_, rows = _ask_agent_for_xy(q1)
 		x_vals, y_vals = _rows_to_xy(rows)
+		x_vals = _sanitize_x_labels(x_vals)
 		plots.append({
 			"Data": {
 				"X": x_vals,
 				"Y": y_vals
 			},
+			"Plot-type": "line",
 			"X-axis-label": "Date",
 			"Y-axis-label": "Number of Detections",
 			"Description": "Total detections per day within the selected range"
@@ -110,11 +124,13 @@ def generate_2d_plots(
 	try:
 		_, rows = _ask_agent_for_xy(q2)
 		x_vals, y_vals = _rows_to_xy(rows)
+		x_vals = _sanitize_x_labels(x_vals)
 		plots.append({
 			"Data": {
 				"X": x_vals,
 				"Y": y_vals
 			},
+			"Plot-type": "bar",
 			"X-axis-label": "Vehicle Type",
 			"Y-axis-label": "Number of Detections",
 			"Description": "Distribution of detections across vehicle types"
@@ -132,11 +148,13 @@ def generate_2d_plots(
 	try:
 		_, rows = _ask_agent_for_xy(q3)
 		x_vals, y_vals = _rows_to_xy(rows)
+		x_vals = _sanitize_x_labels(x_vals)
 		plots.append({
 			"Data": {
 				"X": x_vals,
 				"Y": y_vals
 			},
+			"Plot-type": "pie",
 			"X-axis-label": "Direction",
 			"Y-axis-label": "Number of Detections",
 			"Description": "Inbound vs Outbound detections"
@@ -154,11 +172,13 @@ def generate_2d_plots(
 	try:
 		_, rows = _ask_agent_for_xy(q4)
 		x_vals, y_vals = _rows_to_xy(rows)
+		x_vals = _sanitize_x_labels(x_vals)
 		plots.append({
 			"Data": {
 				"X": x_vals,
 				"Y": y_vals
 			},
+			"Plot-type": "line",
 			"X-axis-label": "Date",
 			"Y-axis-label": "Average OCR Score",
 			"Description": "Mean OCR confidence per day within the selected range"
@@ -176,11 +196,13 @@ def generate_2d_plots(
 	try:
 		_, rows = _ask_agent_for_xy(q5)
 		x_vals, y_vals = _rows_to_xy(rows)
+		x_vals = _sanitize_x_labels(x_vals)
 		plots.append({
 			"Data": {
 				"X": x_vals,
 				"Y": y_vals
 			},
+			"Plot-type": "donut",
 			"X-axis-label": "Device",
 			"Y-axis-label": "Number of Detections",
 			"Description": "Distribution of detections across different devices"
