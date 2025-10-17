@@ -134,7 +134,7 @@ def on_startup():
 	)
 
 
-@app.get("/plots/2d")
+@app.get("/plots")
 def get_2d_plots(
 		start_date: Optional[date] = Query(None, description="Start date (YYYY-MM-DD)"),
 		end_date: Optional[date] = Query(None, description="End date (YYYY-MM-DD)"),
@@ -145,6 +145,21 @@ def get_2d_plots(
 	):
 	"""
 	Return multiple 2D-ready datasets using the SQL Agent for query generation.
+	Returns a list of JSON objects with the following structure:
+	[
+		{
+			"Data": {
+				"X": [values],
+				"Y": [values]
+			},
+			"X-axis-label": "string",
+			"Y-axis-label": "string", 
+			"Description": "brief explanation of plot"
+		}
+	]
+	
+	Supports line, bar, donut, and pie chart types.
+	If start_date and end_date are not provided, queries the entire database.
 	"""
 	try:
 		return get_2d_plots_via_agent(start_date, end_date, device, vehicle_type, db, created_by)
