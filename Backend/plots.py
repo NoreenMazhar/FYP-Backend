@@ -213,6 +213,135 @@ def generate_2d_plots(
 	return plots
 
 
+def convert_text_to_plots(
+		text_description: str,
+		start_date: Optional[date] = None,
+		end_date: Optional[date] = None,
+		device: Optional[str] = None,
+		vehicle_type: Optional[str] = None,
+):
+	"""
+	Convert a text description to plot data using the SQL agent.
+	The text description should describe what kind of plot/analysis the user wants.
+	Returns a list of plot objects in the specified JSON format.
+	"""
+	where_clause = _build_filter_clause(start_date, end_date, device, vehicle_type)
+	plots: list[dict] = []
+
+	# Create a comprehensive prompt for the SQL agent
+	prompt = f"""
+	You are a SQL expert. Based on the user's request: "{text_description}"
+	
+	Write a MySQL SELECT query over the data_raw table that returns two columns aliased as 'x' and 'y'.
+	
+	Requirements:
+	- The query should be relevant to the user's request
+	- Use the WHERE clause: {where_clause}
+	- The 'x' column should contain categorical or time-based data
+	- The 'y' column should contain numerical data (counts, averages, sums, etc.)
+	- Group by the 'x' column if appropriate
+	- Order the results logically
+	- Only output the SQL query, no other text
+	
+	Available columns in data_raw:
+	- local_timestamp (datetime)
+	- device_name (string)
+	- direction (string) 
+	- vehicle_type (string)
+	- ocr_score (float)
+	- vehicle_types_lp_ocr (string)
+	
+	Examples of good queries:
+	- For "show me detections by hour": SELECT HOUR(local_timestamp) as x, COUNT(*) as y FROM data_raw WHERE {where_clause} GROUP BY HOUR(local_timestamp) ORDER BY HOUR(local_timestamp)
+	- For "average ocr score by device": SELECT device_name as x, AVG(ocr_score) as y FROM data_raw WHERE {where_clause} GROUP BY device_name ORDER BY AVG(ocr_score) DESC
+	"""
+
+	try:
+		_, rows = _ask_agent_for_xy(prompt)
+		if not rows:
+			# Fallback to a basic query if the agent doesn't return results
+			fallback_prompt = f"""
+			Write a MySQL SELECT over data_raw that returns two columns aliased as x and y.
+			x must be vehicle_type and y must be COUNT(*).
+			Filter with: {where_clause}. Group by vehicle_type. Order by COUNT(*) DESC.
+			Only output SQL.
+			"""
+			_, rows = _ask_agent_for_xy(fallback_prompt)
+		
+		if rows:
+			x_vals, y_vals = _rows_to_xy(rows)
+			x_vals = _sanitize_x_labels(x_vals)
+			
+			# Determine plot type based on the data
+			plot_type = "bar"  # Default
+			if len(x_vals) > 10:  # If many data points, use line chart
+				plot_type = "line"
+			elif len(x_vals) <= 5:  # If few categories, use pie chart
+				plot_type = "pie"
+			
+			# Generate appropriate labels
+			x_label = "Category"
+			y_label = "Count"
+			
+			# Try to infer better labels from the data
+			if any("hour" in str(x).lower() or "time" in str(x).lower() for x in x_vals):
+				x_label = "Time"
+			elif any("date" in str(x).lower() for x in x_vals):
+				x_label = "Date"
+			elif any("device" in str(x).lower() for x in x_vals):
+				x_label = "Device"
+			elif any("type" in str(x).lower() for x in x_vals):
+				x_label = "Vehicle Type"
+			elif any("direction" in str(x).lower() for x in x_vals):
+				x_label = "Direction"
+			
+			if any("avg" in str(y).lower() or "average" in str(y).lower() for y in y_vals):
+				y_label = "Average Value"
+			elif any("sum" in str(y).lower() for y in y_vals):
+				y_label = "Total Value"
+			elif any("count" in str(y).lower() for y in y_vals):
+				y_label = "Count"
+			
+			plots.append({
+				"Data": {
+					"X": x_vals,
+					"Y": y_vals
+				},
+				"Plot-type": plot_type,
+				"X-axis-label": x_label,
+				"Y-axis-label": y_label,
+				"Description": f"Analysis based on: {text_description}"
+			})
+		else:
+			# If no data, return an empty plot with a message
+			plots.append({
+				"Data": {
+					"X": ["No Data"],
+					"Y": [0]
+				},
+				"Plot-type": "bar",
+				"X-axis-label": "Status",
+				"Y-axis-label": "Count",
+				"Description": f"No data found for: {text_description}"
+			})
+			
+	except Exception as e:
+		logger.warning(f"Text to plot conversion failed: {e}")
+		# Return an error plot
+		plots.append({
+			"Data": {
+				"X": ["Error"],
+				"Y": [0]
+			},
+			"Plot-type": "bar",
+			"X-axis-label": "Status",
+			"Y-axis-label": "Count",
+			"Description": f"Error processing request: {text_description}"
+		})
+
+	return plots
+
+
 def get_2d_plots_via_agent(
 		start_date: Optional[date],
 		end_date: Optional[date],

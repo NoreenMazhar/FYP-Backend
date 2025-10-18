@@ -90,7 +90,7 @@ def _get_openrouter_llm(temperature: float = 0) -> ChatOpenAI:
     return ChatOpenAI(
         api_key=api_key,
         base_url=base_url,
-        model="google/gemma-3n-e2b-it:free",
+        model="google/gemini-2.0-flash-exp:free",
         temperature=temperature,
         default_headers=default_headers
     )

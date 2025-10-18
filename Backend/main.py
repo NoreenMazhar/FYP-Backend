@@ -15,7 +15,7 @@ from sql_agent import (
 	get_schema_summary,
 )
 from Anomaly_Detection import detect_anomalies, get_anomaly_summary
-from plots import get_2d_plots_via_agent
+from plots import get_2d_plots_via_agent, convert_text_to_plots
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -51,6 +51,13 @@ class LoginRequest(BaseModel):
 
 class QueryRequest(BaseModel):
 	query: str
+
+class TextToPlotRequest(BaseModel):
+	text_description: str
+	start_date: Optional[date] = None
+	end_date: Optional[date] = None
+	device: Optional[str] = None
+	vehicle_type: Optional[str] = None
 
 class VehicleDetection(BaseModel):
 	timestamp: datetime
@@ -166,6 +173,89 @@ def get_2d_plots(
 	except Exception as exc:
 		logger.exception("Failed to generate 2D plots via agent")
 		raise HTTPException(status_code=500, detail="Failed to generate 2D plots") from exc
+
+@app.post("/text-to-plots")
+def convert_text_to_plots_route(
+		payload: TextToPlotRequest,
+		db: Database = Depends(get_db),
+		created_by: Optional[int] = Query(None, description="If provided, save visualizations under this user id")
+	):
+	"""
+	Convert a text description to plot data using the SQL agent.
+	
+	This endpoint takes a natural language description of what kind of plot/analysis 
+	the user wants and generates appropriate plot data by using the SQL agent to 
+	create and execute relevant database queries.
+	
+	Returns a list of JSON objects with the following structure:
+	[
+		{
+			"Data": {
+				"X": [values],
+				"Y": [values]
+			},
+			"Plot-type": "bar|line|pie|donut",
+			"X-axis-label": "string",
+			"Y-axis-label": "string", 
+			"Description": "brief explanation of plot"
+		}
+	]
+	
+	Example text descriptions:
+	- "Show me detections by hour of day"
+	- "Average OCR score by device"
+	- "Vehicle type distribution"
+	- "Detections over time"
+	- "Peak hours analysis"
+	"""
+	try:
+		plots = convert_text_to_plots(
+			text_description=payload.text_description,
+			start_date=payload.start_date,
+			end_date=payload.end_date,
+			device=payload.device,
+			vehicle_type=payload.vehicle_type
+		)
+		
+		# Optionally persist each plot as a visualization
+		if created_by is not None:
+			conn = Database.get_instance()
+			for plot in plots:
+				try:
+					viz_type = "chart"  # Default type
+					title = f"Text-to-Plot: {payload.text_description[:50]}..."
+					config = {
+						"x": plot.get("Data", {}).get("X", []),
+						"y": plot.get("Data", {}).get("Y", []),
+						"description": plot.get("Description", ""),
+						"x_axis_label": plot.get("X-axis-label", ""),
+						"y_axis_label": plot.get("Y-axis-label", ""),
+						"plot_type": plot.get("Plot-type", "bar"),
+						"filters": {
+							"start_date": payload.start_date.isoformat() if payload.start_date else None,
+							"end_date": payload.end_date.isoformat() if payload.end_date else None,
+							"device": payload.device,
+							"vehicle_type": payload.vehicle_type,
+						},
+						"text_description": payload.text_description
+					}
+					conn.execute(
+						"INSERT INTO visualizations (title, viz_type, config, created_by) VALUES (%s, %s, %s, %s)",
+						(
+							title,
+							viz_type,
+							json.dumps(config),
+							int(created_by),
+						),
+					)
+				except Exception as e:
+					logger.warning(f"Failed to persist text-to-plot visualization: {e}")
+		
+		return plots
+		
+	except Exception as exc:
+		logger.exception("Failed to convert text to plots")
+		raise HTTPException(status_code=500, detail="Failed to convert text to plots") from exc
 
 @app.post("/auth/register")
 def register(payload: RegisterRequest, db: Database = Depends(get_db)):
