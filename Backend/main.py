@@ -33,7 +33,7 @@ class RegisterRequest(BaseModel):
 	password: str
 	display_name: str | None = None
 	full_name: str | None = None  # For backward compatibility
-	user_type: str = Field(default="user", pattern="^(Streamer|admin|user)$")
+	user_type: str = Field(default="user", pattern="^(admin|Analyst|View|Security)$")
 	
 	@model_validator(mode='after')
 	def validate_name_fields(self):
@@ -72,6 +72,43 @@ class VehicleDetectionsResponse(BaseModel):
 	detections: List[VehicleDetection]
 	total_count: int
 
+class UpdateUserStatusRequest(BaseModel):
+	email: EmailStr
+	status: bool  # True for active, False for inactive
+
+class UpdateUserTypeRequest(BaseModel):
+	email: EmailStr
+	user_type: str = Field(pattern="^(admin|Analyst|View|Security)$")
+
+class DeviceResponse(BaseModel):
+	id: int
+	device_uid: str
+	name: str
+	location: str | None = None
+	status: str
+	uptime: float | None = None
+	last_sync: str | None = None
+	device_type: str
+	created_at: datetime
+	updated_at: datetime
+
+class DeviceListResponse(BaseModel):
+	devices: List[DeviceResponse]
+	total_count: int
+
+class AddDeviceRequest(BaseModel):
+	device_uid: str
+	name: str
+	location: str | None = None
+	device_type: str = Field(default="camera")
+	model_id: int | None = None
+	status: str = Field(default="inactive", pattern="^(inactive|active|maintenance|decommissioned)$")
+
+class UpdateDeviceRequest(BaseModel):
+	name: str | None = None
+	location: str | None = None
+	status: str | None = Field(None, pattern="^(inactive|active|maintenance|decommissioned)$")
+
 
 def get_db() -> Database:
 	return Database.get_instance()
@@ -84,7 +121,7 @@ def ensure_users_table(db: Database) -> None:
 			id BIGINT AUTO_INCREMENT PRIMARY KEY,
 			email VARCHAR(255) UNIQUE NOT NULL,
 			display_name VARCHAR(120) NOT NULL,
-			user_type VARCHAR(16) NOT NULL CHECK (user_type IN ('Streamer','admin','user')),
+			user_type VARCHAR(16) NOT NULL CHECK (user_type IN ('admin','Analyst','View','Security')),
 			password_hash TEXT NOT NULL,
 			is_active BOOLEAN NOT NULL DEFAULT TRUE,
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -119,12 +156,62 @@ def ensure_anomalies_table(db: Database) -> None:
 		"""
 	)
 
+def ensure_device_tables(db: Database) -> None:
+	# Create device_models table
+	db.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS device_models (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			vendor VARCHAR(120) NOT NULL,
+			model_name VARCHAR(120) NOT NULL,
+			device_type VARCHAR(32) NOT NULL,
+			capabilities JSON NOT NULL DEFAULT ('{}'),
+			datasheet_url VARCHAR(512),
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		"""
+	)
+	
+	# Create devices table
+	db.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS devices (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			device_uid VARCHAR(128) UNIQUE NOT NULL,
+			device_type VARCHAR(32) NOT NULL,
+			model_id BIGINT NULL,
+			name VARCHAR(255) NOT NULL,
+			location_id BIGINT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'inactive',
+			timezone VARCHAR(64),
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			FOREIGN KEY (model_id) REFERENCES device_models(id) ON DELETE SET NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		"""
+	)
+	
+	# Create device_health table for status tracking
+	db.execute(
+		"""
+		CREATE TABLE IF NOT EXISTS device_health (
+			id BIGINT AUTO_INCREMENT PRIMARY KEY,
+			device_id BIGINT NOT NULL,
+			health_status VARCHAR(32) NOT NULL,
+			details JSON NOT NULL DEFAULT ('{}'),
+			checked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		"""
+	)
+
 
 @app.on_event("startup")
 def on_startup():
 	db = Database.get_instance()
 	ensure_users_table(db)
 	ensure_anomalies_table(db)
+	ensure_device_tables(db)
 	configure_openrouter_from_env()
 	# Ensure visualizations table exists (aligns with SQL/basic.sql)
 	db.execute(
@@ -674,4 +761,316 @@ async def run_anomaly_detection(db: Database = Depends(get_db)):
 	except Exception as exc:
 		logger.exception("Failed to run anomaly detection")
 		raise HTTPException(status_code=500, detail="Failed to run anomaly detection") from exc
+
+
+@app.put("/users/status")
+def update_user_status(payload: UpdateUserStatusRequest, db: Database = Depends(get_db)):
+	"""
+	Update user status (active/inactive) by email.
+	"""
+	try:
+		logger.info(f"Updating status for user {payload.email} to {'active' if payload.status else 'inactive'}")
+		
+		# Check if user exists
+		user = db.execute("SELECT id, email, display_name, user_type, is_active FROM users WHERE email=%s", (payload.email,))
+		if not user:
+			raise HTTPException(status_code=404, detail="User not found")
+		
+		user = user[0]
+		
+		# Update user status
+		db.execute(
+			"UPDATE users SET is_active=%s, updated_at=CURRENT_TIMESTAMP WHERE email=%s",
+			(payload.status, payload.email)
+		)
+		
+		logger.info(f"Successfully updated status for user {payload.email}")
+		
+		return {
+			"message": f"User status updated successfully",
+			"user": {
+				"id": user["id"],
+				"email": user["email"],
+				"display_name": user["display_name"],
+				"user_type": user["user_type"],
+				"is_active": payload.status
+			}
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to update user status for {payload.email}")
+		raise HTTPException(status_code=500, detail="Failed to update user status") from exc
+
+
+@app.put("/users/type")
+def update_user_type(payload: UpdateUserTypeRequest, db: Database = Depends(get_db)):
+	"""
+	Update user type (admin/Analyst/View/Security) by email.
+	"""
+	try:
+		logger.info(f"Updating user type for {payload.email} to {payload.user_type}")
+		
+		# Check if user exists
+		user = db.execute("SELECT id, email, display_name, user_type, is_active FROM users WHERE email=%s", (payload.email,))
+		if not user:
+			raise HTTPException(status_code=404, detail="User not found")
+		
+		user = user[0]
+		
+		# Update user type
+		db.execute(
+			"UPDATE users SET user_type=%s, updated_at=CURRENT_TIMESTAMP WHERE email=%s",
+			(payload.user_type, payload.email)
+		)
+		
+		logger.info(f"Successfully updated user type for {payload.email}")
+		
+		return {
+			"message": f"User type updated successfully",
+			"user": {
+				"id": user["id"],
+				"email": user["email"],
+				"display_name": user["display_name"],
+				"user_type": payload.user_type,
+				"is_active": user["is_active"]
+			}
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to update user type for {payload.email}")
+		raise HTTPException(status_code=500, detail="Failed to update user type") from exc
+
+
+@app.get("/devices", response_model=DeviceListResponse)
+def get_devices(db: Database = Depends(get_db)):
+	"""
+	Get all devices for the frontend dashboard.
+	Returns device list with status, uptime, and last sync information.
+	"""
+	try:
+		logger.info("Fetching devices for dashboard...")
+		
+		# Query devices with health information
+		query = """
+		SELECT 
+			d.id,
+			d.device_uid,
+			d.name,
+			d.device_type,
+			d.status,
+			d.created_at,
+			d.updated_at,
+			COALESCE(dh.health_status, 'offline') as health_status,
+			COALESCE(dh.checked_at, d.updated_at) as last_checked,
+			COALESCE(dh.details, '{}') as health_details
+		FROM devices d
+		LEFT JOIN device_health dh ON d.id = dh.device_id 
+			AND dh.id = (
+				SELECT MAX(id) FROM device_health 
+				WHERE device_id = d.id
+			)
+		ORDER BY d.name
+		"""
+		
+		results = db.execute(query)
+		
+		if not results:
+			return DeviceListResponse(devices=[], total_count=0)
+		
+		devices = []
+		for row in results:
+			# Calculate uptime (simplified - in real implementation, this would be more complex)
+			uptime = 99.5  # Default uptime, in real implementation calculate from health data
+			if row['health_status'] == 'offline':
+				uptime = 0.0
+			elif row['health_status'] == 'warning':
+				uptime = 85.0
+			
+			# Calculate last sync time
+			last_checked = row['last_checked']
+			if last_checked:
+				time_diff = datetime.now() - last_checked
+				if time_diff.total_seconds() < 60:
+					last_sync = "Just now"
+				elif time_diff.total_seconds() < 3600:
+					last_sync = f"{int(time_diff.total_seconds() / 60)} min ago"
+				elif time_diff.total_seconds() < 86400:
+					last_sync = f"{int(time_diff.total_seconds() / 3600)} hours ago"
+				else:
+					last_sync = f"{int(time_diff.total_seconds() / 86400)} days ago"
+			else:
+				last_sync = "Never"
+			
+			# Map status to display format
+			status_display = "Online" if row['status'] == 'active' and row['health_status'] == 'ok' else "Offline"
+			
+			device = DeviceResponse(
+				id=row['id'],
+				device_uid=row['device_uid'],
+				name=row['name'],
+				location=None,  # Will be populated when location system is implemented
+				status=status_display,
+				uptime=uptime,
+				last_sync=last_sync,
+				device_type=row['device_type'],
+				created_at=row['created_at'],
+				updated_at=row['updated_at']
+			)
+			devices.append(device)
+		
+		return DeviceListResponse(devices=devices, total_count=len(devices))
+		
+	except Exception as exc:
+		logger.exception("Failed to get devices")
+		raise HTTPException(status_code=500, detail="Failed to retrieve devices") from exc
+
+
+@app.post("/devices")
+def add_device(payload: AddDeviceRequest, db: Database = Depends(get_db)):
+	"""
+	Add a new device to the system.
+	"""
+	try:
+		logger.info(f"Adding new device: {payload.name} ({payload.device_uid})")
+		
+		# Check if device already exists
+		existing = db.execute("SELECT id FROM devices WHERE device_uid=%s", (payload.device_uid,))
+		if existing:
+			raise HTTPException(status_code=409, detail="Device with this UID already exists")
+		
+		# Insert new device
+		db.execute(
+			"""
+			INSERT INTO devices (device_uid, device_type, model_id, name, status)
+			VALUES (%s, %s, %s, %s, %s)
+			""",
+			(payload.device_uid, payload.device_type, payload.model_id, payload.name, payload.status)
+		)
+		
+		# Get the created device
+		device = db.execute("SELECT * FROM devices WHERE device_uid=%s", (payload.device_uid,))
+		device = device[0]
+		
+		logger.info(f"Successfully added device: {device['name']}")
+		
+		return {
+			"message": "Device added successfully",
+			"device": {
+				"id": device['id'],
+				"device_uid": device['device_uid'],
+				"name": device['name'],
+				"device_type": device['device_type'],
+				"status": device['status'],
+				"created_at": device['created_at']
+			}
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to add device {payload.name}")
+		raise HTTPException(status_code=500, detail="Failed to add device") from exc
+
+
+@app.put("/devices/{device_id}")
+def update_device(device_id: int, payload: UpdateDeviceRequest, db: Database = Depends(get_db)):
+	"""
+	Update device information by device ID.
+	"""
+	try:
+		logger.info(f"Updating device {device_id}")
+		
+		# Check if device exists
+		device = db.execute("SELECT * FROM devices WHERE id=%s", (device_id,))
+		if not device:
+			raise HTTPException(status_code=404, detail="Device not found")
+		
+		device = device[0]
+		
+		# Build update query dynamically based on provided fields
+		update_fields = []
+		update_values = []
+		
+		if payload.name is not None:
+			update_fields.append("name = %s")
+			update_values.append(payload.name)
+		
+		if payload.status is not None:
+			update_fields.append("status = %s")
+			update_values.append(payload.status)
+		
+		if not update_fields:
+			raise HTTPException(status_code=400, detail="No fields to update")
+		
+		# Add updated_at
+		update_fields.append("updated_at = CURRENT_TIMESTAMP")
+		update_values.append(device_id)
+		
+		# Execute update
+		query = f"UPDATE devices SET {', '.join(update_fields)} WHERE id = %s"
+		db.execute(query, tuple(update_values))
+		
+		# Get updated device
+		updated_device = db.execute("SELECT * FROM devices WHERE id=%s", (device_id,))
+		updated_device = updated_device[0]
+		
+		logger.info(f"Successfully updated device {device_id}")
+		
+		return {
+			"message": "Device updated successfully",
+			"device": {
+				"id": updated_device['id'],
+				"device_uid": updated_device['device_uid'],
+				"name": updated_device['name'],
+				"device_type": updated_device['device_type'],
+				"status": updated_device['status'],
+				"updated_at": updated_device['updated_at']
+			}
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to update device {device_id}")
+		raise HTTPException(status_code=500, detail="Failed to update device") from exc
+
+
+@app.delete("/devices/{device_id}")
+def delete_device(device_id: int, db: Database = Depends(get_db)):
+	"""
+	Delete a device by device ID.
+	"""
+	try:
+		logger.info(f"Deleting device {device_id}")
+		
+		# Check if device exists
+		device = db.execute("SELECT * FROM devices WHERE id=%s", (device_id,))
+		if not device:
+			raise HTTPException(status_code=404, detail="Device not found")
+		
+		device = device[0]
+		
+		# Delete device (cascade will handle related records)
+		db.execute("DELETE FROM devices WHERE id=%s", (device_id,))
+		
+		logger.info(f"Successfully deleted device {device_id}: {device['name']}")
+		
+		return {
+			"message": "Device deleted successfully",
+			"deleted_device": {
+				"id": device['id'],
+				"device_uid": device['device_uid'],
+				"name": device['name']
+			}
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to delete device {device_id}")
+		raise HTTPException(status_code=500, detail="Failed to delete device") from exc
 

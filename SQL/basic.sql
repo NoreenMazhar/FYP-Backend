@@ -3,7 +3,7 @@ CREATE TABLE users (
   id              BIGINT AUTO_INCREMENT PRIMARY KEY,
   email           VARCHAR(255) UNIQUE NOT NULL,
   display_name    VARCHAR(120) NOT NULL,
-  user_type       VARCHAR(16) NOT NULL CHECK (user_type IN ('Streamer','admin','user')),
+  user_type       VARCHAR(16) NOT NULL CHECK (user_type IN ('admin','Analyst','View','Security')),
   password_hash   TEXT NOT NULL,
   is_active       BOOLEAN NOT NULL DEFAULT TRUE,
   created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
