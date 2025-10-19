@@ -221,3 +221,131 @@ This will display:
 - Detailed information about key tables
 
 For detailed information about the schema discovery feature, see [SCHEMA_DISCOVERY.md](SCHEMA_DISCOVERY.md).
+
+## API Routes Reference
+
+### Authentication Routes
+
+| Route            | Method | Description         | Request Body                                                                                               | Response                                                               |
+| ---------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `/auth/register` | POST   | Register a new user | `{"email": "user@example.com", "password": "password", "display_name": "User Name", "user_type": "admin"}` | `{"access_token": "jwt_token", "token_type": "bearer", "user": {...}}` |
+| `/auth/login`    | POST   | Login user          | `{"email": "user@example.com", "password": "password"}`                                                    | `{"access_token": "jwt_token", "token_type": "bearer", "user": {...}}` |
+
+### User Management Routes
+
+| Route           | Method | Description                          | Request Body                                          | Response                                                         |
+| --------------- | ------ | ------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------------------- |
+| `/users/status` | PUT    | Update user status (active/inactive) | `{"email": "user@example.com", "status": true}`       | `{"message": "User status updated successfully", "user": {...}}` |
+| `/users/type`   | PUT    | Update user type                     | `{"email": "user@example.com", "user_type": "admin"}` | `{"message": "User type updated successfully", "user": {...}}`   |
+
+### Device Management Routes
+
+| Route                            | Method | Description                           | Request Body                                                                                                       | Response                                                                                                   |
+| -------------------------------- | ------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `/devices`                       | GET    | Get all devices list                  | None                                                                                                               | `{"devices": [...], "total_count": 5}`                                                                     |
+| `/devices`                       | POST   | Add new device                        | `{"device_uid": "A1", "name": "Device-A1", "location": "North Gate", "device_type": "camera", "status": "active"}` | `{"message": "Device added successfully", "device": {...}}`                                                |
+| `/devices/{device_id}`           | PUT    | Update device information             | `{"name": "New Name", "status": "active"}`                                                                         | `{"message": "Device updated successfully", "device": {...}}`                                              |
+| `/devices/{device_id}`           | DELETE | Delete device                         | None                                                                                                               | `{"message": "Device deleted successfully", "deleted_device": {...}}`                                      |
+| `/devices/{device_id}/details`   | GET    | Get detailed device info with metrics | None                                                                                                               | `{"id": 1, "device_uid": "A1", "name": "Device-A1", "status": "Online", "uptime": 99.9, "metrics": {...}}` |
+| `/devices/{device_id}/metrics`   | GET    | Get device performance metrics        | None                                                                                                               | `{"device_id": 1, "device_name": "Device-A1", "metrics": {...}, "last_updated": "..."}`                    |
+| `/devices/{device_id}/telemetry` | POST   | Add device telemetry data             | Query params: `metric_name`, `metric_value`, `metric_units`                                                        | `{"message": "Telemetry data added successfully", ...}`                                                    |
+
+### Data Analysis Routes
+
+| Route                 | Method | Description                | Request Body                                                                                               | Response                                                                                                   |
+| --------------------- | ------ | -------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `/query`              | POST   | Natural language SQL query | `{"query": "Show me detections by hour"}`                                                                  | `{"question": "...", "executed_sql": "...", "result": "...", "used_device_scope": true}`                   |
+| `/plots`              | GET    | Get 2D plot data           | Query params: `start_date`, `end_date`, `device`, `vehicle_type`                                           | `[{"Data": {"X": [...], "Y": [...]}, "X-axis-label": "...", "Y-axis-label": "...", "Description": "..."}]` |
+| `/text-to-plots`      | POST   | Convert text to plot data  | `{"text_description": "Show me detections by hour", "start_date": "2024-01-01", "end_date": "2024-01-31"}` | `[{"Data": {"X": [...], "Y": [...]}, "Plot-type": "bar", ...}]`                                            |
+| `/vehicle-detections` | GET    | Get vehicle detection data | Query params: `start_date`, `end_date`                                                                     | `{"detections": [...], "total_count": 100}`                                                                |
+
+### Anomaly Detection Routes
+
+| Route                | Method | Description               | Request Body | Response                                                                                            |
+| -------------------- | ------ | ------------------------- | ------------ | --------------------------------------------------------------------------------------------------- |
+| `/anomalies/detect`  | POST   | Run anomaly detection     | None         | `{"message": "Anomaly detection completed", "anomalies_stored": 15, "detection_time": "..."}`       |
+| `/anomalies`         | GET    | Get all anomalies         | None         | `{"anomalies": [...], "active_count": 5, "total_count": 15, "detection_time": "..."}`               |
+| `/anomalies/summary` | GET    | Get anomaly summary       | None         | `{"active_anomalies": 5, "resolved_anomalies": 10, "total_anomalies": 15, "last_detection": "..."}` |
+| `/anomalies/active`  | GET    | Get only active anomalies | None         | `{"active_anomalies": [...], "active_count": 5, "detection_time": "..."}`                           |
+
+### Schema Discovery Routes
+
+| Route     | Method | Description         | Request Body                           | Response                                                             |
+| --------- | ------ | ------------------- | -------------------------------------- | -------------------------------------------------------------------- |
+| `/schema` | GET    | Get database schema | Query param: `summary_only` (optional) | `{"schema": {...}, "message": "Full schema retrieved successfully"}` |
+
+### Data Models
+
+#### User Types
+
+- `admin` - Full system access
+- `Analyst` - Data analysis capabilities
+- `View` - Read-only access
+- `Security` - Security monitoring access
+
+#### Device Status
+
+- `inactive` - Device is offline
+- `active` - Device is online and operational
+- `maintenance` - Device is under maintenance
+- `decommissioned` - Device is no longer in use
+
+#### Device Metrics
+
+- `detections` - Number of vehicle detections
+- `errors` - Number of error events
+- `cpu_usage` - CPU utilization percentage
+- `memory_usage` - Memory utilization percentage
+- `storage_usage` - Storage utilization percentage
+- `network_latency` - Network latency in milliseconds
+- `temperature` - Device temperature in Celsius
+
+### Example Usage
+
+#### Register a new user
+
+```bash
+curl -X POST http://localhost:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"password123","display_name":"Admin User","user_type":"admin"}'
+```
+
+#### Get all devices
+
+```bash
+curl -X GET http://localhost:8000/devices
+```
+
+#### Get detailed device information
+
+```bash
+curl -X GET http://localhost:8000/devices/1/details
+```
+
+#### Add device telemetry
+
+```bash
+curl -X POST "http://localhost:8000/devices/1/telemetry?metric_name=cpu_usage&metric_value=45.5&metric_units=%"
+```
+
+#### Update user status
+
+```bash
+curl -X PUT http://localhost:8000/users/status \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","status":false}'
+```
+
+#### Run anomaly detection
+
+```bash
+curl -X POST http://localhost:8000/anomalies/detect
+```
+
+#### Query with natural language
+
+```bash
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query":"Show me the top 5 devices with highest error rates"}'
+```
