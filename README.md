@@ -15,19 +15,6 @@ This project provides a MySQL database (via Docker) and a FastAPI backend with u
 First, set up the Qwen2.5 AI model for SQL generation:
 
 ```powershell
-cd Backend/docker
-python setup_docker_model.py
-```
-
-This will:
-
-- Pull the Qwen2.5 model Docker image
-- Start the model container on port 8080
-- Test the model to ensure it's working
-
-Alternative manual setup:
-
-```powershell
 docker model pull ai/qwen2.5:3B-Q4_K_M
 docker model run -d --name qwen2.5-container -p 8080:8080 ai/qwen2.5:3B-Q4_K_M
 ```
