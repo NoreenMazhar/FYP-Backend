@@ -16,6 +16,7 @@ from sql_agent import (
 )
 from Anomaly_Detection import detect_anomalies, get_anomaly_summary
 from plots import get_2d_plots_via_agent, convert_text_to_plots
+from report_generator import generate_comprehensive_report
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -58,6 +59,12 @@ class TextToPlotRequest(BaseModel):
 	end_date: Optional[date] = None
 	device: Optional[str] = None
 	vehicle_type: Optional[str] = None
+
+class ReportRequest(BaseModel):
+	start_date: date
+	end_date: date
+	title: Optional[str] = None
+	description: Optional[str] = None
 
 class VehicleDetection(BaseModel):
 	timestamp: datetime
@@ -1348,4 +1355,185 @@ def add_device_telemetry(
 	except Exception as exc:
 		logger.exception(f"Failed to add telemetry for device {device_id}")
 		raise HTTPException(status_code=500, detail="Failed to add telemetry data") from exc
+
+
+@app.post("/reports/generate")
+def generate_report(
+	payload: ReportRequest,
+	db: Database = Depends(get_db),
+	created_by: Optional[int] = Query(None, description="User ID creating the report")
+):
+	"""
+	Generate a comprehensive traffic monitoring report with visualizations and summary.
+	The report includes 3-4 key sections with visualizations and an executive summary.
+	"""
+	try:
+		logger.info(f"Generating report for period {payload.start_date} to {payload.end_date}")
+		
+		# Call the report generator module
+		report_data = generate_comprehensive_report(
+			start_date=payload.start_date,
+			end_date=payload.end_date,
+			title=payload.title,
+			description=payload.description,
+			created_by=created_by,
+			db=db
+		)
+		
+		return report_data
+		
+	except Exception as exc:
+		logger.exception("Failed to generate report")
+		raise HTTPException(status_code=500, detail="Failed to generate report") from exc
+
+
+
+
+@app.get("/reports")
+def get_reports(
+	db: Database = Depends(get_db),
+	limit: int = Query(10, description="Number of reports to return"),
+	offset: int = Query(0, description="Number of reports to skip")
+):
+	"""
+	Get a list of generated reports with basic information.
+	"""
+	try:
+		logger.info("Fetching reports list...")
+		
+		# Get reports with basic info
+		reports = db.execute("""
+			SELECT 
+				r.id,
+				r.title,
+				r.description,
+				r.status,
+				r.created_at,
+				r.updated_at,
+				u.display_name as created_by_name
+			FROM reports r
+			LEFT JOIN users u ON r.created_by = u.id
+			ORDER BY r.created_at DESC
+			LIMIT %s OFFSET %s
+		""", (limit, offset))
+		
+		# Get total count
+		count_result = db.execute("SELECT COUNT(*) as total FROM reports")
+		total_count = count_result[0]['total'] if count_result else 0
+		
+		return {
+			"reports": reports,
+			"total_count": total_count,
+			"limit": limit,
+			"offset": offset
+		}
+		
+	except Exception as exc:
+		logger.exception("Failed to get reports")
+		raise HTTPException(status_code=500, detail="Failed to retrieve reports") from exc
+
+
+@app.get("/reports/{report_id}")
+def get_report_details(
+	report_id: int,
+	db: Database = Depends(get_db)
+):
+	"""
+	Get detailed information for a specific report including all sections and visualizations.
+	"""
+	try:
+		logger.info(f"Fetching report details for {report_id}")
+		
+		# Get report basic info
+		report = db.execute("""
+			SELECT 
+				r.id,
+				r.title,
+				r.description,
+				r.status,
+				r.created_at,
+				r.updated_at,
+				u.display_name as created_by_name
+			FROM reports r
+			LEFT JOIN users u ON r.created_by = u.id
+			WHERE r.id = %s
+		""", (report_id,))
+		
+		if not report:
+			raise HTTPException(status_code=404, detail="Report not found")
+		
+		report = report[0]
+		
+		# Get report visualizations and metadata
+		visualizations = db.execute("""
+			SELECT 
+				v.id,
+				v.title,
+				v.viz_type,
+				v.config,
+				v.created_at
+			FROM report_visualizations rv
+			JOIN visualizations v ON rv.visualization_id = v.id
+			WHERE rv.report_id = %s
+			ORDER BY rv.position
+		""", (report_id,))
+		
+		# Extract report data from visualization config
+		report_data = None
+		if visualizations:
+			config = visualizations[0].get('config', {})
+			if isinstance(config, str):
+				import json
+				config = json.loads(config)
+			report_data = config
+		
+		return {
+			"report": report,
+			"report_data": report_data,
+			"visualizations": visualizations
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to get report details for {report_id}")
+		raise HTTPException(status_code=500, detail="Failed to retrieve report details") from exc
+
+
+@app.delete("/reports/{report_id}")
+def delete_report(
+	report_id: int,
+	db: Database = Depends(get_db)
+):
+	"""
+	Delete a report and its associated visualizations.
+	"""
+	try:
+		logger.info(f"Deleting report {report_id}")
+		
+		# Check if report exists
+		report = db.execute("SELECT id, title FROM reports WHERE id = %s", (report_id,))
+		if not report:
+			raise HTTPException(status_code=404, detail="Report not found")
+		
+		report = report[0]
+		
+		# Delete report (cascade will handle related records)
+		db.execute("DELETE FROM reports WHERE id = %s", (report_id,))
+		
+		logger.info(f"Successfully deleted report {report_id}: {report['title']}")
+		
+		return {
+			"message": "Report deleted successfully",
+			"deleted_report": {
+				"id": report['id'],
+				"title": report['title']
+			}
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to delete report {report_id}")
+		raise HTTPException(status_code=500, detail="Failed to delete report") from exc
 
