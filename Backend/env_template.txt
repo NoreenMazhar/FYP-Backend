@@ -1,5 +1,12 @@
-OPENROUTER_API_KEY=your_openrouter_api_key_here
-OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# Hugging Face Configuration
+HUGGINGFACE_API_TOKEN=your_huggingface_token_here
+
+# Optional: Specify a different model (default: Qwen/Qwen2.5-Coder-32B-Instruct)
+# HUGGINGFACE_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct
+# Alternative models:
+# - Qwen/Qwen2.5-7B-Instruct (lighter, faster)
+# - Qwen/Qwen2.5-72B-Instruct (more powerful)
+# - meta-llama/Llama-3.1-8B-Instruct (alternative)
 
 # Database Configuration
 DB_HOST=localhost

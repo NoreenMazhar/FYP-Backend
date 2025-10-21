@@ -34,7 +34,7 @@ class RegisterRequest(BaseModel):
 	password: str
 	display_name: str | None = None
 	full_name: str | None = None  # For backward compatibility
-	user_type: str = Field(default="user", pattern="^(admin|Analyst|View|Security)$")
+	user_type: str = Field(default="View", pattern="^(admin|Analyst|View|Security)$")
 	
 	@model_validator(mode='after')
 	def validate_name_fields(self):
@@ -104,6 +104,8 @@ class DeviceListResponse(BaseModel):
 	total_count: int
 
 class AddDeviceRequest(BaseModel):
+	model_config = {"protected_namespaces": ()}
+	
 	device_uid: str
 	name: str
 	location: str | None = None
@@ -1359,10 +1361,10 @@ def add_device_telemetry(
 
 @app.post("/reports/generate")
 def generate_report(
-	payload: ReportRequest,
-	db: Database = Depends(get_db),
-	created_by: Optional[int] = Query(None, description="User ID creating the report")
-):
+		payload: ReportRequest,
+		db: Database = Depends(get_db),
+		created_by: Optional[int] = Query(None, description="User ID creating the report")
+	):
 	"""
 	Generate a comprehensive traffic monitoring report with visualizations and summary.
 	The report includes 3-4 key sections with visualizations and an executive summary.
@@ -1387,14 +1389,12 @@ def generate_report(
 		raise HTTPException(status_code=500, detail="Failed to generate report") from exc
 
 
-
-
 @app.get("/reports")
 def get_reports(
-	db: Database = Depends(get_db),
-	limit: int = Query(10, description="Number of reports to return"),
-	offset: int = Query(0, description="Number of reports to skip")
-):
+		db: Database = Depends(get_db),
+		limit: int = Query(10, description="Number of reports to return"),
+		offset: int = Query(0, description="Number of reports to skip")
+	):
 	"""
 	Get a list of generated reports with basic information.
 	"""
@@ -1435,9 +1435,9 @@ def get_reports(
 
 @app.get("/reports/{report_id}")
 def get_report_details(
-	report_id: int,
-	db: Database = Depends(get_db)
-):
+		report_id: int,
+		db: Database = Depends(get_db)
+	):
 	"""
 	Get detailed information for a specific report including all sections and visualizations.
 	"""
@@ -1502,9 +1502,9 @@ def get_report_details(
 
 @app.delete("/reports/{report_id}")
 def delete_report(
-	report_id: int,
-	db: Database = Depends(get_db)
-):
+		report_id: int,
+		db: Database = Depends(get_db)
+	):
 	"""
 	Delete a report and its associated visualizations.
 	"""

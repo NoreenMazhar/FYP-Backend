@@ -8,7 +8,7 @@ from collections import defaultdict
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain.agents.agent_types import AgentType
-from langchain_openai import ChatOpenAI
+from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
 from langchain.agents import AgentExecutor
 from langchain.tools import Tool
 from langchain.agents.output_parsers import ReActSingleInputOutputParser
@@ -52,48 +52,56 @@ class CustomSQLOutputParser(ReActSingleInputOutputParser):
 
 def configure_openrouter_from_env() -> None:
     """
-    Configure OpenRouter API settings from environment variables.
+    Configure Hugging Face API settings from environment variables.
     Required environment variables:
-    - OPENROUTER_API_KEY: Your OpenRouter API key
-    Optional environment variables:
-    - OPENROUTER_BASE_URL: OpenRouter base URL (default: https://openrouter.ai/api/v1)
-    - YOUR_SITE_URL: Your site URL for rankings on openrouter.ai
-    - YOUR_SITE_NAME: Your site name for rankings on openrouter.ai
+    - HUGGINGFACE_API_TOKEN: Your Hugging Face API token
     """
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        logger.warning("OPENROUTER_API_KEY is not set; LLM features will be disabled.")
+    api_token = os.getenv("HUGGINGFACE_API_TOKEN")
+    if not api_token:
+        logger.warning("HUGGINGFACE_API_TOKEN is not set; LLM features will be disabled.")
         return
-    logger.info("OpenRouter API configured successfully")
+    logger.info("Hugging Face API configured successfully")
 
 
-def _get_openrouter_llm(temperature: float = 0) -> ChatOpenAI:
+def _get_huggingface_llm(temperature: float = 0):
     """
-    Create and return a ChatOpenAI instance configured for OpenRouter.
-    Uses DeepSeek model by default.
+    Create and return a ChatHuggingFace instance.
+    Uses Qwen model for text generation tasks.
+    
+    Note: For SQL and text tasks, use a text generation model, not text-to-waveform.
+    Recommended models:
+    - Qwen/Qwen2.5-Coder-32B-Instruct (for coding/SQL)
+    - Qwen/Qwen2.5-72B-Instruct (for general text)
+    - meta-llama/Llama-3.1-8B-Instruct (lightweight alternative)
     """
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-    site_url = os.getenv("YOUR_SITE_URL", "")
-    site_name = os.getenv("YOUR_SITE_NAME", "")
+    api_token = os.getenv("HUGGINGFACE_API_TOKEN")
     
-    if not api_key:
-        raise ValueError("OPENROUTER_API_KEY environment variable is not set")
+    if not api_token:
+        raise ValueError("HUGGINGFACE_API_TOKEN environment variable is not set")
     
-    # Create default headers
-    default_headers = {}
-    if site_url:
-        default_headers["HTTP-Referer"] = site_url
-    if site_name:
-        default_headers["X-Title"] = site_name
+    # Use Qwen2.5-Coder for SQL generation (better for code/SQL tasks)
+    # Alternative: Use a smaller model like "Qwen/Qwen2.5-7B-Instruct" for faster inference
+    model_name = os.getenv("HUGGINGFACE_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct")
     
-    return ChatOpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        model="google/gemini-2.0-flash-exp:free",
+    # Create HuggingFace Endpoint with proper token
+    llm = HuggingFaceEndpoint(
+        repo_id=model_name,
+        huggingfacehub_api_token=api_token,
+        task="text-generation",
         temperature=temperature,
-        default_headers=default_headers
+        max_new_tokens=2048,
+        top_p=0.95,
+        repetition_penalty=1.1,
+        return_full_text=False,
     )
+    
+    # Wrap in ChatHuggingFace for chat-like interface
+    chat_model = ChatHuggingFace(
+        llm=llm,
+        token=api_token  # Pass token explicitly
+    )
+    
+    return chat_model
 
 
 def _get_sqlalchemy_url_from_env() -> str:
@@ -639,7 +647,7 @@ def _is_database_related_query(question: str) -> tuple[bool, str]:
     # If no keywords found, use LLM for more sophisticated check
     if not has_keyword:
         try:
-            llm = _get_openrouter_llm(temperature=0)
+            llm = _get_huggingface_llm(temperature=0)
             
             validation_prompt = f"""You are a database query validator. The database contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems with the following information:
 - Vehicle detections with timestamps (format: YYYY-MM-DD HH:MM:SS)
@@ -721,7 +729,7 @@ def run_data_raw_agent(question: str) -> dict:
     
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = _get_openrouter_llm(temperature=0)
+    llm = _get_huggingface_llm(temperature=0)
 
     enhanced_prompt = _build_prompt(question, use_device_scope, schema_info, include_tables)
 
@@ -957,7 +965,7 @@ def generate_sql_for_question(question: str) -> str | None:
     include_tables = get_tables_for_query(question, schema_info)
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = _get_openrouter_llm(temperature=0)
+    llm = _get_huggingface_llm(temperature=0)
 
     enhanced_prompt = _build_prompt(question, _is_device_query(question), schema_info, include_tables)
 
