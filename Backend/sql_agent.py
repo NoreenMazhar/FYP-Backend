@@ -8,7 +8,7 @@ from collections import defaultdict
 from langchain_community.utilities import SQLDatabase
 from langchain_community.agent_toolkits.sql.base import create_sql_agent
 from langchain.agents.agent_types import AgentType
-from langchain_huggingface import HuggingFaceEndpoint, ChatHuggingFace
+# Local Docker model integration
 from langchain.agents import AgentExecutor
 from langchain.tools import Tool
 from langchain.agents.output_parsers import ReActSingleInputOutputParser
@@ -50,58 +50,87 @@ class CustomSQLOutputParser(ReActSingleInputOutputParser):
             )
 
 
-def configure_openrouter_from_env() -> None:
+def configure_docker_model_from_env() -> None:
     """
-    Configure Hugging Face API settings from environment variables.
+    Configure Docker model settings from environment variables.
     Required environment variables:
-    - HUGGINGFACE_API_TOKEN: Your Hugging Face API token
+    - LOCAL_MODEL_URL: URL of the local Docker model (default: http://localhost:8080)
     """
-    api_token = os.getenv("HUGGINGFACE_API_TOKEN")
-    if not api_token:
-        logger.warning("HUGGINGFACE_API_TOKEN is not set; LLM features will be disabled.")
-        return
-    logger.info("Hugging Face API configured successfully")
+    local_url = os.getenv("LOCAL_MODEL_URL", "http://localhost:8080")
+    logger.info(f"Docker model configured at: {local_url}")
 
 
-def _get_huggingface_llm(temperature: float = 0):
+def _get_local_llm(temperature: float = 0):
     """
-    Create and return a ChatHuggingFace instance.
-    Uses Qwen model for text generation tasks.
-    
-    Note: For SQL and text tasks, use a text generation model, not text-to-waveform.
-    Recommended models:
-    - Qwen/Qwen2.5-Coder-32B-Instruct (for coding/SQL)
-    - Qwen/Qwen2.5-72B-Instruct (for general text)
-    - meta-llama/Llama-3.1-8B-Instruct (lightweight alternative)
+    Create and return a local model endpoint instance.
+    Uses a local Docker model (Qwen2.5) running on localhost.
     """
-    api_token = os.getenv("HUGGINGFACE_API_TOKEN")
+    local_model_url = os.getenv("LOCAL_MODEL_URL", "http://localhost:8080")
     
-    if not api_token:
-        raise ValueError("HUGGINGFACE_API_TOKEN environment variable is not set")
+    try:
+        import requests
+        # Test if local model is running
+        response = requests.get(f"{local_model_url}/health", timeout=5)
+        if response.status_code == 200:
+            logger.info(f"Using local Docker model at: {local_model_url}")
+            return _create_local_model_endpoint(local_model_url, temperature)
+        else:
+            raise Exception(f"Local model health check failed: {response.status_code}")
+    except Exception as e:
+        logger.error(f"Local Docker model not available at {local_model_url}: {e}")
+        raise ValueError("Local Docker model is required but not available. Please start the Docker model first.")
+
+
+def _create_local_model_endpoint(url: str, temperature: float = 0):
+    """
+    Create a custom LLM endpoint for local Docker model.
+    """
+    from langchain.llms.base import LLM
+    from typing import Optional, List, Any
+    import requests
+    import json
     
-    # Use Qwen2.5-Coder for SQL generation (better for code/SQL tasks)
-    # Alternative: Use a smaller model like "Qwen/Qwen2.5-7B-Instruct" for faster inference
-    model_name = os.getenv("HUGGINGFACE_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct")
+    class LocalDockerLLM(LLM):
+        """Custom LLM class for local Docker model."""
+        
+        url: str
+        temperature: float = 0.0
+        max_tokens: int = 1024
+        
+        def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
+            """Call the local model API."""
+            try:
+                payload = {
+                    "prompt": prompt,
+                    "temperature": self.temperature,
+                    "max_tokens": self.max_tokens,
+                    "stop": stop or []
+                }
+                
+                response = requests.post(
+                    f"{self.url}/generate",
+                    json=payload,
+                    timeout=30
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    return result.get("text", "").strip()
+                else:
+                    logger.error(f"Local model error: {response.status_code} - {response.text}")
+                    return "Error: Local model not responding properly"
+                    
+            except Exception as e:
+                logger.error(f"Error calling local model: {e}")
+                return "Error: Failed to connect to local model"
+        
+        @property
+        def _llm_type(self) -> str:
+            return "local_docker"
     
-    # Create HuggingFace Endpoint with proper token
-    llm = HuggingFaceEndpoint(
-        repo_id=model_name,
-        huggingfacehub_api_token=api_token,
-        task="text-generation",
-        temperature=temperature,
-        max_new_tokens=2048,
-        top_p=0.95,
-        repetition_penalty=1.1,
-        return_full_text=False,
-    )
-    
-    # Wrap in ChatHuggingFace for chat-like interface
-    chat_model = ChatHuggingFace(
-        llm=llm,
-        token=api_token  # Pass token explicitly
-    )
-    
-    return chat_model
+    return LocalDockerLLM(url=url, temperature=temperature)
+
+
 
 
 def _get_sqlalchemy_url_from_env() -> str:
@@ -647,7 +676,7 @@ def _is_database_related_query(question: str) -> tuple[bool, str]:
     # If no keywords found, use LLM for more sophisticated check
     if not has_keyword:
         try:
-            llm = _get_huggingface_llm(temperature=0)
+            llm = _get_local_llm(temperature=0)
             
             validation_prompt = f"""You are a database query validator. The database contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems with the following information:
 - Vehicle detections with timestamps (format: YYYY-MM-DD HH:MM:SS)
@@ -699,7 +728,7 @@ def run_data_raw_agent(question: str) -> dict:
     Uses automatic schema discovery to determine relevant tables dynamically.
     First checks if the question is database-related before processing.
     """
-    configure_openrouter_from_env()
+    configure_docker_model_from_env()
     
     # Check if question is database-related
     is_related, rejection_reason = _is_database_related_query(question)
@@ -729,7 +758,7 @@ def run_data_raw_agent(question: str) -> dict:
     
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = _get_huggingface_llm(temperature=0)
+    llm = _get_local_llm(temperature=0)
 
     enhanced_prompt = _build_prompt(question, use_device_scope, schema_info, include_tables)
 
@@ -958,14 +987,14 @@ def generate_sql_for_question(question: str) -> str | None:
     Use the SQL agent to generate a single final SQL query string for the question.
     Returns the SQL string if extracted, otherwise None.
     """
-    configure_openrouter_from_env()
+    configure_docker_model_from_env()
 
     # Discover schema and set scope
     schema_info = discover_database_schema()
     include_tables = get_tables_for_query(question, schema_info)
     lc_db = get_lc_sql_db(include_tables)
 
-    llm = _get_huggingface_llm(temperature=0)
+    llm = _get_local_llm(temperature=0)
 
     enhanced_prompt = _build_prompt(question, _is_device_query(question), schema_info, include_tables)
 

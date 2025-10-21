@@ -8,8 +8,31 @@ This project provides a MySQL database (via Docker) and a FastAPI backend with u
 
 - Docker and Docker Engine running
 - Python 3.10+ installed
+- Docker Model Engine (for AI model)
 
-### 1) Build and run MySQL with Docker
+### 1) Setup AI Model with Docker
+
+First, set up the Qwen2.5 AI model for SQL generation:
+
+```powershell
+cd Backend/docker
+python setup_docker_model.py
+```
+
+This will:
+
+- Pull the Qwen2.5 model Docker image
+- Start the model container on port 8080
+- Test the model to ensure it's working
+
+Alternative manual setup:
+
+```powershell
+docker model pull ai/qwen2.5:3B-Q4_K_M
+docker model run -d --name qwen2.5-container -p 8080:8080 ai/qwen2.5:3B-Q4_K_M
+```
+
+### 2) Build and run MySQL with Docker
 
 From the repository root (so `SQL/*.sql` are in build context):
 
@@ -26,7 +49,7 @@ Notes:
 - All `.sql` files in `SQL/` run automatically on first startup (empty data dir); they run in alphabetical order.
 - If you need to re-run init scripts, remove the volume or use a new one: `docker volume rm fyp_mysql_data`.
 
-### 2) Create virtual environment and install dependencies
+### 3) Create virtual environment and install dependencies
 
 From the repository root in Windows PowerShell:
 
@@ -37,20 +60,27 @@ source venv/bin/Activate
 pip install -r requirements.txt
 ```
 
-### 3) Configure environment variables
+### 4) Configure environment variables
 
-Set env vars so the backend can connect to the database and issue JWTs.
+Set env vars so the backend can connect to the database and AI model:
 
 ```powershell
+# Database Configuration
 DB_HOST = "127.0.0.1"
 DB_PORT = "3306"
 DB_USER = "FYP-USER"
 DB_PASSWORD = "FYP-PASS"
 DB_NAME = "FYP-DB"
 
+# JWT Configuration
 JWT_SECRET = "key"
 JWT_EXPIRES_IN = "3600"   # seconds (1 hour)
 JWT_PASS = "key"  # used as password hashing salt
+
+# AI Model Configuration
+LOCAL_MODEL_URL = "http://localhost:8080"
+
+# Google API (for additional features)
 GOOGLE_API_KEY= <insert your API key here>
 ```
 
@@ -59,7 +89,7 @@ Tips:
 - `DB_*` variables are used by the backend. They also fall back to `MYSQL_*` if set in your container environment.
 - Change `JWT_SECRET` and `JWT_PASS` to secure values for non-development use.
 
-### 4) Run the FastAPI backend
+### 5) Run the FastAPI backend
 
 Inserting the excels into the database
 
@@ -76,6 +106,33 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 On startup, the backend ensures a `users` table exists.
+
+## Docker Model Management
+
+### Starting the AI Model
+
+```powershell
+docker start qwen2.5-container
+```
+
+### Stopping the AI Model
+
+```powershell
+docker stop qwen2.5-container
+```
+
+### Checking Model Status
+
+```powershell
+docker logs qwen2.5-container
+```
+
+### Testing Model Integration
+
+```powershell
+cd Backend/docker
+python test_local_model.py
+```
 
 ## API Routes Reference
 
