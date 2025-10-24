@@ -8,16 +8,27 @@ This project provides a MySQL database (via Docker) and a FastAPI backend with u
 
 - Docker and Docker Engine running
 - Python 3.10+ installed
-- Docker Model Engine (for AI model)
+- Ollama (for AI model)
 
-### 1) Setup AI Model with Docker
+### 1) Setup AI Model with Ollama
 
-First, set up the Qwen2.5 AI model for SQL generation:
+First, install and set up Ollama for the Qwen2.5 model:
+
+**Install Ollama:**
+
+- Download from: https://ollama.ai/download
+  **Setup the model:**
 
 ```powershell
-docker model pull ai/qwen2.5:3B-Q4_K_M
-docker model run -d --name qwen2.5-container -p 8080:8080 ai/qwen2.5:3B-Q4_K_M
+ollama pull qwen2.5:3b
+ollama serve
 ```
+
+This will:
+
+- Download the Qwen2.5 3B model
+- Start Ollama server on port 11434
+- Provide both CLI and API access
 
 ### 2) Build and run MySQL with Docker
 
@@ -65,7 +76,8 @@ JWT_EXPIRES_IN = "3600"   # seconds (1 hour)
 JWT_PASS = "key"  # used as password hashing salt
 
 # AI Model Configuration
-LOCAL_MODEL_URL = "http://localhost:8080"
+OLLAMA_BASE_URL = "http://localhost:11434"
+OLLAMA_MODEL = "qwen2.5:3b"
 
 # Google API (for additional features)
 GOOGLE_API_KEY= <insert your API key here>
@@ -94,25 +106,23 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 On startup, the backend ensures a `users` table exists.
 
-## Docker Model Management
+## Ollama Model Management
 
-### Starting the AI Model
-
-```powershell
-docker start qwen2.5-container
-```
-
-### Stopping the AI Model
+### Starting Ollama Server
 
 ```powershell
-docker stop qwen2.5-container
+ollama serve
 ```
 
-### Checking Model Status
+### Pulling/Updating the Model
 
 ```powershell
-docker logs qwen2.5-container
+ollama pull qwen2.5:3b
 ```
+
+### Stopping Ollama Server
+
+Press `Ctrl+C` in the terminal where Ollama is running.
 
 ### Testing Model Integration
 
@@ -120,6 +130,8 @@ docker logs qwen2.5-container
 cd Backend/docker
 python test_local_model.py
 ```
+
+**Note**: Ollama provides both CLI and API access. The model will be available at `http://localhost:11434` when running.
 
 ## API Routes Reference
 

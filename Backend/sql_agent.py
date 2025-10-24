@@ -50,85 +50,91 @@ class CustomSQLOutputParser(ReActSingleInputOutputParser):
             )
 
 
-def configure_docker_model_from_env() -> None:
+def configure_ollama_from_env() -> None:
     """
-    Configure Docker model settings from environment variables.
+    Configure Ollama model settings from environment variables.
     Required environment variables:
-    - LOCAL_MODEL_URL: URL of the local Docker model (default: http://localhost:8080)
+    - OLLAMA_BASE_URL: URL of the Ollama server (default: http://localhost:11434)
+    - OLLAMA_MODEL: Model name to use (default: qwen2.5:3b)
     """
-    local_url = os.getenv("LOCAL_MODEL_URL", "http://localhost:8080")
-    logger.info(f"Docker model configured at: {local_url}")
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    model_name = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+    logger.info(f"Ollama configured at: {base_url} with model: {model_name}")
 
 
 def _get_local_llm(temperature: float = 0):
     """
-    Create and return a local model endpoint instance.
-    Uses a local Docker model (Qwen2.5) running on localhost.
+    Create and return a local Ollama model endpoint instance.
+    Uses Ollama server running on localhost.
     """
-    local_model_url = os.getenv("LOCAL_MODEL_URL", "http://localhost:8080")
+    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    model_name = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
     
     try:
         import requests
-        # Test if local model is running
-        response = requests.get(f"{local_model_url}/health", timeout=5)
+        # Test if Ollama server is running
+        response = requests.get(f"{base_url}/api/tags", timeout=5)
         if response.status_code == 200:
-            logger.info(f"Using local Docker model at: {local_model_url}")
-            return _create_local_model_endpoint(local_model_url, temperature)
+            logger.info(f"Using Ollama model: {model_name} at {base_url}")
+            return _create_ollama_endpoint(base_url, model_name, temperature)
         else:
-            raise Exception(f"Local model health check failed: {response.status_code}")
+            raise Exception(f"Ollama server health check failed: {response.status_code}")
     except Exception as e:
-        logger.error(f"Local Docker model not available at {local_model_url}: {e}")
-        raise ValueError("Local Docker model is required but not available. Please start the Docker model first.")
+        logger.error(f"Ollama server not available at {base_url}: {e}")
+        raise ValueError("Ollama server is required but not available. Please start Ollama first with 'ollama serve'.")
 
 
-def _create_local_model_endpoint(url: str, temperature: float = 0):
+def _create_ollama_endpoint(base_url: str, model_name: str, temperature: float = 0):
     """
-    Create a custom LLM endpoint for local Docker model.
+    Create a custom LLM endpoint for Ollama model.
     """
     from langchain.llms.base import LLM
     from typing import Optional, List, Any
     import requests
     import json
     
-    class LocalDockerLLM(LLM):
-        """Custom LLM class for local Docker model."""
+    class OllamaLLM(LLM):
+        """Custom LLM class for Ollama model."""
         
-        url: str
+        base_url: str
+        model_name: str
         temperature: float = 0.0
-        max_tokens: int = 1024
         
         def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
-            """Call the local model API."""
+            """Call the Ollama API."""
             try:
                 payload = {
+                    "model": self.model_name,
                     "prompt": prompt,
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
-                    "stop": stop or []
+                    "stream": False,
+                    "options": {
+                        "temperature": self.temperature,
+                        "stop": stop or []
+                    }
                 }
                 
                 response = requests.post(
-                    f"{self.url}/generate",
+                    f"{self.base_url}/api/generate",
                     json=payload,
                     timeout=30
                 )
                 
                 if response.status_code == 200:
                     result = response.json()
-                    return result.get("text", "").strip()
+                    return result.get("response", "").strip()
                 else:
-                    logger.error(f"Local model error: {response.status_code} - {response.text}")
-                    return "Error: Local model not responding properly"
+                    logger.error(f"Ollama error: {response.status_code} - {response.text}")
+                    return "Error: Ollama not responding properly"
                     
             except Exception as e:
-                logger.error(f"Error calling local model: {e}")
-                return "Error: Failed to connect to local model"
+                logger.error(f"Error calling Ollama: {e}")
+                return "Error: Failed to connect to Ollama"
         
         @property
         def _llm_type(self) -> str:
-            return "local_docker"
+            return "ollama"
     
-    return LocalDockerLLM(url=url, temperature=temperature)
+    return OllamaLLM(base_url=base_url, model_name=model_name, temperature=temperature)
 
 
 
@@ -432,6 +438,31 @@ def _execute_sql_safely(db: SQLDatabase, sql: str) -> tuple[list, str]:
         return [], f"SQL execution error: {str(e)}"
 
 
+def _execute_sql_with_engine(sql: str) -> tuple[list, str]:
+    """Execute SQL using the database engine directly for more reliable results."""
+    try:
+        from sqlalchemy import create_engine, text
+        import os
+        
+        # Get connection details
+        user = os.getenv("DB_USER", os.getenv("MYSQL_USER", "FYP-USER"))
+        password = os.getenv("DB_PASSWORD", os.getenv("MYSQL_PASSWORD", "FYP-PASS"))
+        host = os.getenv("DB_HOST", "localhost")
+        port = os.getenv("DB_PORT", "3306")
+        database = os.getenv("DB_NAME", os.getenv("MYSQL_DATABASE", "FYP-DB"))
+        
+        connection_url = f"mysql+mysqlconnector://{user}:{password}@{host}:{port}/{database}?charset=utf8mb4"
+        engine = create_engine(connection_url)
+        
+        with engine.connect() as connection:
+            result = connection.execute(text(sql))
+            rows = result.fetchall()
+            return [list(row) for row in rows], ""
+            
+    except Exception as e:
+        return [], f"Direct SQL execution error: {str(e)}"
+
+
 def _extract_sql_from_text(text: str) -> str:
     """Extract SQL query from text, looking for common patterns."""
     if not text:
@@ -601,36 +632,74 @@ def _build_prompt(question: str, use_device_scope: bool, schema_info: dict = Non
     # Add relationship information
     relationship_context = _format_schema_relationships(schema_info, relevant_tables)
 
-    formatting = (
-        "Format your final answer in clear Markdown with these sections:\n"
-        "### Overview\n"
-        "- Briefly state the direct answer in plain language.\n"
-        "### Key Findings\n"
-        "- Bullet important numbers, trends, or comparisons.\n"
-        "### SQL Used\n"
-        "```sql\n<your final SQL here>\n```\n"
-        "### Observations\n"
-        "- Short insights or anomalies worth noting.\n"
-        "### Possible Questions\n"
-        "- List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings.\n"
-        "\n"
-        "IMPORTANT DATA STRUCTURE NOTES:\n"
-        "- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)\n"
-        "- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) for type score\n"
-        "- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) for license plate\n"
-        "- Device names: Device-A1, Device-B3, Device-C2, etc.\n"
-        "- Vehicle types: Car, Truck, Bus, Motorcycle\n"
-        "- Directions: Inbound, Outbound\n"
-        "- OCR scores: 0.0-1.0 (decimal) or 0-100 (percentage)\n"
-        "- Type scores: 0.0-1.0 (decimal from vehicle_types_lp_ocr)"
-    )
+    # Enhanced formatting with specific examples for license plate queries
+    question_lower = question.lower()
+    is_license_plate_query = any(term in question_lower for term in ['plate', 'license', 'ocr', 'average', 'score'])
+    
+    if is_license_plate_query:
+        formatting = (
+            "You are analyzing vehicle detection data from ALPR systems. For license plate queries, follow this specific format:\n\n"
+            "### Overview\n"
+            "- Provide a direct, clear answer to the question about the license plate or OCR scores.\n"
+            "### Key Findings\n"
+            "- List specific numbers: average OCR score, count of detections, date range, etc.\n"
+            "### SQL Used\n"
+            "```sql\n<your final SQL query here>\n```\n"
+            "### Observations\n"
+            "- Note any patterns, anomalies, or interesting findings about the license plate.\n"
+            "### Possible Questions\n"
+            "- Suggest 3-5 related follow-up questions about this license plate or similar analysis.\n\n"
+            "CRITICAL DATA EXTRACTION RULES:\n"
+            "- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)\n"
+            "- To extract license plate: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1)\n"
+            "- To extract type score: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1)\n"
+            "- For average OCR score of specific plate: SELECT AVG(ocr_score) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'PLATE_NUMBER'\n"
+            "- For count of detections: SELECT COUNT(*) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'PLATE_NUMBER'\n"
+            "- Device names: Device-A1, Device-B3, Device-C2, etc.\n"
+            "- Vehicle types: Car, Truck, Bus, Motorcycle\n"
+            "- Directions: Inbound, Outbound\n"
+            "- OCR scores: 0.0-1.0 (decimal) or 0-100 (percentage)\n"
+            "- Type scores: 0.0-1.0 (decimal from vehicle_types_lp_ocr)\n\n"
+            "EXAMPLE QUERIES:\n"
+            "- Average OCR for plate 'ABC123': SELECT AVG(ocr_score) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'ABC123'\n"
+            "- All detections of plate 'XYZ789': SELECT * FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'XYZ789'\n"
+            "- Count by vehicle type: SELECT vehicle_type, COUNT(*) FROM data_raw GROUP BY vehicle_type"
+        )
+    else:
+        formatting = (
+            "Format your final answer in clear Markdown with these sections:\n"
+            "### Overview\n"
+            "- Briefly state the direct answer in plain language.\n"
+            "### Key Findings\n"
+            "- Bullet important numbers, trends, or comparisons.\n"
+            "### SQL Used\n"
+            "```sql\n<your final SQL here>\n```\n"
+            "### Observations\n"
+            "- Short insights or anomalies worth noting.\n"
+            "### Possible Questions\n"
+            "- List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings.\n"
+            "\n"
+            "IMPORTANT DATA STRUCTURE NOTES:\n"
+            "- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)\n"
+            "- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) for type score\n"
+            "- Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) for license plate\n"
+            "- Device names: Device-A1, Device-B3, Device-C2, etc.\n"
+            "- Vehicle types: Car, Truck, Bus, Motorcycle\n"
+            "- Directions: Inbound, Outbound\n"
+            "- OCR scores: 0.0-1.0 (decimal) or 0-100 (percentage)\n"
+            "- Type scores: 0.0-1.0 (decimal from vehicle_types_lp_ocr)"
+        )
 
     guardrails = (
-        "Constraints: Use only read-only SELECTs; avoid DDL/DML. If multiple queries are needed, "
-        "show the final, most important SQL in the SQL Used section. Keep the language simple. "
-        "If the user asks for deep or detailed analysis, expand the In-Depth Analysis section accordingly.\n\n"
+        "Constraints: Use only read-only SELECTs; avoid DDL/DML. Execute the query and provide actual results. "
+        "If the query returns no results, state that clearly. Keep the language simple and direct.\n\n"
         "IMPORTANT: Follow the ReAct format. Use 'Action:' to specify what you're doing, 'Observation:' to show results, "
-        "and 'Final Answer:' to provide your complete response in the markdown format specified above."
+        "and 'Final Answer:' to provide your complete response in the markdown format specified above.\n\n"
+        "For license plate queries, always:\n"
+        "1. First check if the plate exists in the data\n"
+        "2. Calculate the requested metric (average, count, etc.)\n"
+        "3. Provide the actual numerical result\n"
+        "4. Include the SQL query used"
     )
 
     return (
@@ -722,13 +791,195 @@ Your answer:"""
     return True, ""
 
 
+def _handle_license_plate_query(question: str, lc_db: SQLDatabase, llm) -> dict:
+    """
+    Handle license plate queries with a more direct approach to avoid parsing issues.
+    """
+    question_lower = question.lower()
+    
+    # Extract license plate from question
+    import re
+    
+    # Common words to exclude from plate matching
+    exclude_words = {'average', 'ocr', 'score', 'plate', 'license', 'what', 'is', 'of', 'the', 'for', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'with', 'by'}
+    
+    plate_patterns = [
+        r'plate\s+([A-Z0-9]{6,8})',  # "plate X2XRPWP"
+        r'license\s+([A-Z0-9]{6,8})',  # "license X2XRPWP"
+    ]
+    
+    plate_number = None
+    for pattern in plate_patterns:
+        match = re.search(pattern, question_lower, re.IGNORECASE)
+        if match:
+            plate_number = match.group(1).upper()
+            break
+    
+    # If no specific pattern matched, look for any 6-8 character alphanumeric word that's not a common word
+    if not plate_number:
+        words = question.split()
+        for word in words:
+            if (len(word) >= 6 and len(word) <= 8 and 
+                word.isalnum() and 
+                word.lower() not in exclude_words and
+                any(c.isdigit() for c in word) and 
+                any(c.isalpha() for c in word)):
+                plate_number = word.upper()
+                break
+    
+    
+    if not plate_number:
+        return {
+            "question": question,
+            "executed_sql": None,
+            "result": {
+                "Overview": "Could not identify a license plate number in the question.",
+                "Key Findings": "Please specify the license plate number you want to analyze.",
+                "SQL Used": "N/A - No plate number identified",
+                "Observations": "License plate queries should include the specific plate number (e.g., 'X2XRPWP').",
+                "Possible Questions": [
+                    "What is the average OCR score for plate ABC123?",
+                    "How many times was plate XYZ789 detected?",
+                    "Show me all detections for plate DEF456",
+                    "What vehicle type is associated with plate GHI789?",
+                    "When was plate JKL012 last detected?"
+                ]
+            },
+            "used_device_scope": False,
+            "error": "No plate number identified"
+        }
+    
+    # Build the SQL query
+    sql_query = f"SELECT AVG(ocr_score) as average_ocr, COUNT(*) as detection_count FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = '{plate_number}'"
+    
+    try:
+        # Try direct SQL execution first for more reliable results
+        result, error = _execute_sql_with_engine(sql_query)
+        
+        if error:
+            # Fallback to LangChain SQLDatabase if direct execution fails
+            logger.warning(f"Direct SQL execution failed: {error}, trying LangChain method")
+            result, error = _execute_sql_safely(lc_db, sql_query)
+            
+            if error:
+                return {
+                    "question": question,
+                    "executed_sql": sql_query,
+                    "result": {
+                        "Overview": f"Error executing query for plate {plate_number}: {error}",
+                        "Key Findings": "The query could not be executed successfully.",
+                        "SQL Used": f"```sql\n{sql_query}\n```",
+                        "Observations": "There was an issue with the database query execution.",
+                        "Possible Questions": [
+                            "Check if the plate number format is correct",
+                            "Verify the database connection",
+                            "Try a different plate number"
+                        ]
+                    },
+                    "used_device_scope": False,
+                    "error": error
+                }
+        
+        # Process results
+        avg_ocr = 0
+        count = 0
+        
+        if result and len(result) > 0:
+            # Direct execution returns list of lists
+            if isinstance(result[0], (list, tuple)) and len(result[0]) >= 2:
+                avg_ocr = float(result[0][0]) if result[0][0] is not None else 0
+                count = int(result[0][1]) if result[0][1] is not None else 0
+            else:
+                # Fallback parsing for string results
+                result_str = str(result)
+                import re
+                numbers = re.findall(r'[\d.]+', result_str)
+                if len(numbers) >= 2:
+                    avg_ocr = float(numbers[0])
+                    count = int(float(numbers[1]))
+        else:
+            # If no results, try separate queries
+            try:
+                count_query = f"SELECT COUNT(*) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = '{plate_number}'"
+                count_result, count_error = _execute_sql_with_engine(count_query)
+                
+                if not count_error and count_result and len(count_result) > 0:
+                    count = int(count_result[0][0]) if count_result[0][0] is not None else 0
+                    
+                    if count > 0:
+                        avg_query = f"SELECT AVG(ocr_score) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = '{plate_number}'"
+                        avg_result, avg_error = _execute_sql_with_engine(avg_query)
+                        
+                        if not avg_error and avg_result and len(avg_result) > 0:
+                            avg_ocr = float(avg_result[0][0]) if avg_result[0][0] is not None else 0
+            except Exception as e:
+                logger.warning(f"Fallback query execution failed: {e}")
+                avg_ocr = 0
+                count = 0
+        
+        # Process the results
+        if count == 0:
+            overview = f"License plate {plate_number} was not found in the database."
+            key_findings = ["No detections found for this plate number"]
+            observations = ["The plate may not have been detected by any ALPR systems", "Check if the plate number is correct"]
+        else:
+            overview = f"License plate {plate_number} has an average OCR score of {avg_ocr:.6f} across {count} detection(s)."
+            key_findings = [
+                f"Average OCR score: {avg_ocr:.6f}",
+                f"Total detections: {count}",
+                f"OCR score range: 0.0 to 1.0 (higher is better)"
+            ]
+            observations = [
+                f"The plate was detected {count} time(s) in the database",
+                f"Average confidence level: {avg_ocr:.1%}" if avg_ocr <= 1.0 else f"Average confidence level: {avg_ocr:.1f}%"
+            ]
+        
+        return {
+            "question": question,
+            "executed_sql": sql_query,
+            "result": {
+                "Overview": overview,
+                "Key Findings": key_findings,
+                "SQL Used": f"```sql\n{sql_query}\n```",
+                "Observations": observations,
+                "Possible Questions": [
+                    f"What is the average OCR score for plate {plate_number}?",
+                    f"How many times was plate {plate_number} detected?",
+                    f"Show me all detections for plate {plate_number}",
+                    f"What vehicle type is associated with plate {plate_number}?",
+                    f"When was plate {plate_number} last detected?"
+                ]
+            },
+            "used_device_scope": False
+        }
+        
+    except Exception as e:
+        return {
+            "question": question,
+            "executed_sql": sql_query,
+            "result": {
+                "Overview": f"Error processing query for plate {plate_number}: {str(e)}",
+                "Key Findings": "An unexpected error occurred during processing.",
+                "SQL Used": f"```sql\n{sql_query}\n```",
+                "Observations": "There was a technical issue with the query processing.",
+                "Possible Questions": [
+                    "Try rephrasing the question",
+                    "Check if the plate number is correct",
+                    "Contact support if the issue persists"
+                ]
+            },
+            "used_device_scope": False,
+            "error": str(e)
+        }
+
+
 def run_data_raw_agent(question: str) -> dict:
     """End-to-end: use LangChain SQL Agent (OpenRouter/DeepSeek) to generate, run, and summarize SQL.
 
     Uses automatic schema discovery to determine relevant tables dynamically.
     First checks if the question is database-related before processing.
     """
-    configure_docker_model_from_env()
+    configure_ollama_from_env()
     
     # Check if question is database-related
     is_related, rejection_reason = _is_database_related_query(question)
@@ -746,6 +997,20 @@ def run_data_raw_agent(question: str) -> dict:
             "used_device_scope": False,
             "error": "Question not database-related"
         }
+
+    # Check if this is a license plate query and handle it directly
+    question_lower = question.lower()
+    is_license_plate_query = any(term in question_lower for term in ['plate', 'license', 'ocr', 'average', 'score'])
+    
+    if is_license_plate_query:
+        # Discover database schema and determine relevant tables
+        schema_info = discover_database_schema()
+        include_tables = get_tables_for_query(question, schema_info)
+        lc_db = get_lc_sql_db(include_tables)
+        llm = _get_local_llm(temperature=0)
+        
+        # Use specialized license plate handler
+        return _handle_license_plate_query(question, lc_db, llm)
 
     # Discover database schema and determine relevant tables
     schema_info = discover_database_schema()
@@ -864,7 +1129,54 @@ def run_data_raw_agent(question: str) -> dict:
         
         # Fallback: Use direct LLM call with structured prompt
         try:
-            fallback_prompt = f"""
+            # Check if this is a license plate query for specialized handling
+            question_lower = question.lower()
+            is_license_plate_query = any(term in question_lower for term in ['plate', 'license', 'ocr', 'average', 'score'])
+            
+            if is_license_plate_query:
+                fallback_prompt = f"""
+You are a SQL expert specializing in ALPR (Automatic License Plate Recognition) data analysis. 
+
+Database Schema:
+{lc_db.get_table_info()}
+
+Question: {question}
+
+CRITICAL DATA EXTRACTION RULES:
+- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)
+- To extract license plate: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1)
+- To extract type score: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1)
+- For average OCR score of specific plate: SELECT AVG(ocr_score) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'PLATE_NUMBER'
+- For count of detections: SELECT COUNT(*) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'PLATE_NUMBER'
+
+EXAMPLE QUERIES:
+- Average OCR for plate 'ABC123': SELECT AVG(ocr_score) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'ABC123'
+- All detections of plate 'XYZ789': SELECT * FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'XYZ789'
+- Count by vehicle type: SELECT vehicle_type, COUNT(*) FROM data_raw GROUP BY vehicle_type
+
+Please provide your response in the following format:
+
+### Overview
+- [Direct answer about the license plate or OCR score]
+
+### Key Findings  
+- [Specific numbers: average OCR score, count of detections, date range, etc.]
+
+### SQL Used
+```sql
+[Your SQL query here]
+```
+
+### Observations
+- [Patterns, anomalies, or interesting findings about the license plate]
+
+### Possible Questions
+- [3-5 related follow-up questions about this license plate or similar analysis]
+
+Important: Only use SELECT statements. Execute the query and provide actual results.
+"""
+            else:
+                fallback_prompt = f"""
 You are a SQL expert. Given the following database schema and question, generate a SQL query and provide a structured response.
 
 Database Schema:
@@ -987,7 +1299,7 @@ def generate_sql_for_question(question: str) -> str | None:
     Use the SQL agent to generate a single final SQL query string for the question.
     Returns the SQL string if extracted, otherwise None.
     """
-    configure_docker_model_from_env()
+    configure_ollama_from_env()
 
     # Discover schema and set scope
     schema_info = discover_database_schema()

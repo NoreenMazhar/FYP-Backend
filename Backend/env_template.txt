@@ -1,5 +1,6 @@
-# Local Docker Model Configuration
-LOCAL_MODEL_URL=http://localhost:8080
+# Local Ollama Model Configuration
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:3b
 
 # Database Configuration
 DB_HOST=localhost
