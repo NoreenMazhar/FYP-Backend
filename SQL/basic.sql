@@ -90,3 +90,4 @@ CREATE TABLE report_visualizations (
   FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
   FOREIGN KEY (visualization_id) REFERENCES visualizations(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+

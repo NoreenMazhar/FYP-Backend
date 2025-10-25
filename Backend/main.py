@@ -143,6 +143,27 @@ def get_db() -> Database:
 	return Database.get_instance()
 
 
+def normalize_user_type(user_type: str) -> str:
+	"""
+	Normalize user_type to match the exact case expected by the database constraint.
+	The database expects: 'admin', 'Analyst', 'View', 'Security'
+	"""
+	user_type_lower = user_type.lower()
+	
+	if user_type_lower == "admin":
+		return "admin"
+	elif user_type_lower == "analyst":
+		return "Analyst"
+	elif user_type_lower == "view":
+		return "View"
+	elif user_type_lower == "security":
+		return "Security"
+	else:
+		# If it doesn't match any expected values, return the original
+		# This will be caught by Pydantic validation
+		return user_type
+
+
 def ensure_users_table(db: Database) -> None:
 	db.execute(
 		"""
@@ -385,9 +406,14 @@ def register(payload: RegisterRequest, db: Database = Depends(get_db)):
 
 		password_hash = hash_password(payload.password)
 		logger.info(f"Hashing password for user {payload.email}")
+		
+		# Normalize user_type to match database constraint case requirements
+		normalized_user_type = normalize_user_type(payload.user_type)
+		logger.info(f"Normalized user_type from '{payload.user_type}' to '{normalized_user_type}'")
+		
 		db.execute(
 			"INSERT INTO users (email, password_hash, display_name, user_type) VALUES (%s, %s, %s, %s)",
-			(payload.email, password_hash, payload.display_name, payload.user_type),
+			(payload.email, password_hash, payload.display_name, normalized_user_type),
 		)
 		user = db.execute("SELECT id, email, display_name, user_type FROM users WHERE email=%s", (payload.email,))
 		user = user[0]
@@ -848,10 +874,14 @@ def update_user_type(payload: UpdateUserTypeRequest, db: Database = Depends(get_
 		
 		user = user[0]
 		
+		# Normalize user_type to match database constraint case requirements
+		normalized_user_type = normalize_user_type(payload.user_type)
+		logger.info(f"Normalized user_type from '{payload.user_type}' to '{normalized_user_type}'")
+		
 		# Update user type
 		db.execute(
 			"UPDATE users SET user_type=%s, updated_at=CURRENT_TIMESTAMP WHERE email=%s",
-			(payload.user_type, payload.email)
+			(normalized_user_type, payload.email)
 		)
 		
 		logger.info(f"Successfully updated user type for {payload.email}")
