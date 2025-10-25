@@ -39,10 +39,37 @@ def _ask_agent_for_xy(question: str) -> tuple[str, list[dict]]:
 	"""Use SQL agent to produce SQL with two columns aliased as x and y, then execute it.
 	Returns (executed_sql, rows).
 	"""
-	result = run_data_raw_agent(question)
-	executed_sql = result.get("executed_sql")
+	from sql_agent import generate_sql_for_question
+	
+	# First try direct SQL generation (faster and more reliable for simple queries)
+	executed_sql = generate_sql_for_question(question)
+	
+	# If direct generation failed, try the full agent
+	if not executed_sql:
+		result = run_data_raw_agent(question)
+		executed_sql = result.get("executed_sql")
+		
+		# If no SQL was returned, try to extract it from the result text
+		if not executed_sql:
+			output_text = result.get("result", {})
+			if isinstance(output_text, dict):
+				# Look for SQL in the result structure
+				for key, value in output_text.items():
+					if isinstance(value, str) and "SELECT" in value.upper():
+						# Try to extract SQL from markdown code blocks
+						if "```sql" in value:
+							start = value.find("```sql") + 6
+							end = value.find("```", start)
+							if end > start:
+								executed_sql = value[start:end].strip()
+								break
+						elif value.strip().upper().startswith("SELECT"):
+							executed_sql = value.strip()
+							break
+	
 	if not executed_sql:
 		raise ValueError("SQL agent did not return an executable SQL query")
+	
 	# Execute with our connection for reliable row shape
 	db = Database.get_instance()
 	rows = _execute_sql(db, executed_sql) or []
@@ -113,6 +140,17 @@ def generate_2d_plots(
 		})
 	except Exception as e:
 		logger.warning(f"Detections per day plot failed: {e}")
+		# Add fallback plot with sample data
+		plots.append({
+			"Data": {
+				"X": ["No Data"],
+				"Y": [0]
+			},
+			"Plot-type": "line",
+			"X-axis-label": "Date",
+			"Y-axis-label": "Number of Detections",
+			"Description": "No data available for detections per day"
+		})
 
 	# 2) Detections by vehicle type (Bar chart)
 	q2 = (
@@ -137,6 +175,17 @@ def generate_2d_plots(
 		})
 	except Exception as e:
 		logger.warning(f"Vehicle type plot failed: {e}")
+		# Add fallback plot
+		plots.append({
+			"Data": {
+				"X": ["No Data"],
+				"Y": [0]
+			},
+			"Plot-type": "bar",
+			"X-axis-label": "Vehicle Type",
+			"Y-axis-label": "Number of Detections",
+			"Description": "No data available for vehicle type distribution"
+		})
 
 	# 3) Detections by direction (Pie chart)
 	q3 = (
@@ -161,6 +210,17 @@ def generate_2d_plots(
 		})
 	except Exception as e:
 		logger.warning(f"Direction plot failed: {e}")
+		# Add fallback plot
+		plots.append({
+			"Data": {
+				"X": ["No Data"],
+				"Y": [0]
+			},
+			"Plot-type": "pie",
+			"X-axis-label": "Direction",
+			"Y-axis-label": "Number of Detections",
+			"Description": "No data available for direction analysis"
+		})
 
 	# 4) Average OCR score per day (Line chart)
 	q4 = (
@@ -185,6 +245,17 @@ def generate_2d_plots(
 		})
 	except Exception as e:
 		logger.warning(f"Average OCR per day plot failed: {e}")
+		# Add fallback plot
+		plots.append({
+			"Data": {
+				"X": ["No Data"],
+				"Y": [0]
+			},
+			"Plot-type": "line",
+			"X-axis-label": "Date",
+			"Y-axis-label": "Average OCR Score",
+			"Description": "No data available for OCR score analysis"
+		})
 
 	# 5) Detections by device (Donut chart)
 	q5 = (
@@ -209,6 +280,17 @@ def generate_2d_plots(
 		})
 	except Exception as e:
 		logger.warning(f"Device plot failed: {e}")
+		# Add fallback plot
+		plots.append({
+			"Data": {
+				"X": ["No Data"],
+				"Y": [0]
+			},
+			"Plot-type": "donut",
+			"X-axis-label": "Device",
+			"Y-axis-label": "Number of Detections",
+			"Description": "No data available for device analysis"
+		})
 
 	return plots
 

@@ -97,7 +97,7 @@ def generate_comprehensive_report(
                 "total_detections": stats.get('total_detections', 0),
                 "active_devices": stats.get('active_devices', 0),
                 "vehicle_types_detected": stats.get('vehicle_types_detected', 0),
-                "average_ocr_score": round(stats.get('avg_ocr_score', 0), 2),
+                "average_ocr_score": round(stats.get('avg_ocr_score') or 0, 2),
                 "first_detection": stats.get('first_detection'),
                 "last_detection": stats.get('last_detection')
             },
@@ -120,7 +120,11 @@ def _generate_executive_summary(stats, anomalies, start_date, end_date):
     """Generate an executive summary for the report."""
     total_detections = stats.get('total_detections', 0)
     active_devices = stats.get('active_devices', 0)
-    avg_ocr_score = stats.get('avg_ocr_score', 0)
+    avg_ocr_score = stats.get('avg_ocr_score')
+    # Handle None values for avg_ocr_score
+    if avg_ocr_score is None:
+        avg_ocr_score = 0.0
+    
     active_anomalies = len([a for a in anomalies if a['status'] == 'active'])
     
     # Calculate period duration
@@ -187,7 +191,7 @@ def _create_report_sections(plots, stats, anomalies):
         "visualization": vehicle_plot,
         "insights": [
             f"Vehicle types detected: {stats.get('vehicle_types_detected', 0)}",
-            f"Average OCR confidence: {stats.get('avg_ocr_score', 0):.2f}",
+            f"Average OCR confidence: {(stats.get('avg_ocr_score') or 0):.2f}",
             "Most common vehicle type: " + _get_most_common_vehicle_type(vehicle_plot) if vehicle_plot else "Analysis pending"
         ]
     })
@@ -308,17 +312,52 @@ def _get_direction_analysis(plot):
 def _save_report_to_db(db, title, description, created_by, start_date, end_date, summary, sections):
     """Save the generated report to the database."""
     try:
+        # Ensure we have a valid user ID
+        if created_by is None:
+            # Try to get the first available user, or create a default admin user
+            users = db.execute("SELECT id FROM users LIMIT 1")
+            if users:
+                created_by = users[0]['id']
+            else:
+                # Create a default admin user if no users exist
+                db.execute("""
+                    INSERT INTO users (email, display_name, user_type, password_hash, is_active)
+                    VALUES (%s, %s, %s, %s, %s)
+                """, ('admin@system.local', 'System Admin', 'admin', 'default_hash', True))
+                user_result = db.execute("SELECT LAST_INSERT_ID() as user_id")
+                created_by = user_result[0]['user_id'] if user_result else 1
+        
         # Insert report
         db.execute("""
             INSERT INTO reports (title, description, created_by, status)
             VALUES (%s, %s, %s, %s)
-        """, (title, description, created_by or 1, 'published'))
+        """, (title, description, created_by, 'published'))
         
-        # Get the report ID
-        report_result = db.execute("SELECT LAST_INSERT_ID() as report_id")
-        report_id = report_result[0]['report_id'] if report_result else None
+        # Get the report ID - try multiple methods
+        report_id = None
+        try:
+            report_result = db.execute("SELECT LAST_INSERT_ID() as report_id")
+            if report_result and len(report_result) > 0:
+                report_id = report_result[0].get('report_id') or report_result[0].get('LAST_INSERT_ID()')
+        except Exception as e:
+            logger.warning(f"LAST_INSERT_ID() failed: {e}, trying alternative method")
+        
+        # Fallback: get the most recent report for this user
+        if not report_id:
+            try:
+                recent_report = db.execute("""
+                    SELECT id FROM reports 
+                    WHERE created_by = %s 
+                    ORDER BY created_at DESC 
+                    LIMIT 1
+                """, (created_by,))
+                if recent_report and len(recent_report) > 0:
+                    report_id = recent_report[0].get('id')
+            except Exception as e:
+                logger.error(f"Failed to get report ID via fallback: {e}")
         
         if not report_id:
+            logger.error("Failed to get report ID after all attempts")
             raise Exception("Failed to get report ID")
         
         # Save report metadata
@@ -338,18 +377,40 @@ def _save_report_to_db(db, title, description, created_by, start_date, end_date,
             f"Report: {title}",
             "report",
             json.dumps(report_metadata),
-            created_by or 1
+            created_by
         ))
         
         # Link report to visualization
-        viz_result = db.execute("SELECT LAST_INSERT_ID() as viz_id")
-        viz_id = viz_result[0]['viz_id'] if viz_result else None
+        viz_id = None
+        try:
+            viz_result = db.execute("SELECT LAST_INSERT_ID() as viz_id")
+            if viz_result and len(viz_result) > 0:
+                viz_id = viz_result[0].get('viz_id') or viz_result[0].get('LAST_INSERT_ID()')
+        except Exception as e:
+            logger.warning(f"Failed to get viz_id: {e}")
+        
+        # Fallback: get the most recent visualization for this user
+        if not viz_id:
+            try:
+                recent_viz = db.execute("""
+                    SELECT id FROM visualizations 
+                    WHERE created_by = %s 
+                    ORDER BY created_at DESC 
+                    LIMIT 1
+                """, (created_by,))
+                if recent_viz and len(recent_viz) > 0:
+                    viz_id = recent_viz[0].get('id')
+            except Exception as e:
+                logger.warning(f"Failed to get viz_id via fallback: {e}")
         
         if viz_id:
-            db.execute("""
-                INSERT INTO report_visualizations (report_id, visualization_id, position)
-                VALUES (%s, %s, %s)
-            """, (report_id, viz_id, 0))
+            try:
+                db.execute("""
+                    INSERT INTO report_visualizations (report_id, visualization_id, position)
+                    VALUES (%s, %s, %s)
+                """, (report_id, viz_id, 0))
+            except Exception as e:
+                logger.warning(f"Failed to link report to visualization: {e}")
         
         logger.info(f"Saved report {report_id} to database")
         return report_id

@@ -468,26 +468,74 @@ def _extract_sql_from_text(text: str) -> str:
     if not text:
         return None
     
-    # Look for SQL in code blocks
+    # Look for SQL in code blocks with sql marker
     if "```sql" in text:
         start = text.find("```sql") + 6
         end = text.find("```", start)
         if end > start:
-            return text[start:end].strip()
+            sql = text[start:end].strip()
+            # Remove any additional text before SELECT
+            if "SELECT" in sql.upper():
+                select_idx = sql.upper().find("SELECT")
+                sql = sql[select_idx:]
+            return sql
+    
+    # Look for SQL in plain code blocks (```)
+    if "```" in text and "SELECT" in text.upper():
+        parts = text.split("```")
+        for part in parts:
+            if "SELECT" in part.upper():
+                sql = part.strip()
+                # Remove language markers
+                if sql.startswith("sql\n") or sql.startswith("sql "):
+                    sql = sql[3:].strip()
+                # Extract just the SELECT statement
+                if "SELECT" in sql.upper():
+                    select_idx = sql.upper().find("SELECT")
+                    sql = sql[select_idx:]
+                    # Stop at first semicolon or double newline
+                    if ";" in sql:
+                        sql = sql[:sql.find(";")+1]
+                    return sql.strip()
     
     # Look for SQL in action format
     lines = text.split('\n')
     for i, line in enumerate(lines):
-        if "Action Input:" in line and i + 1 < len(lines):
-            next_line = lines[i + 1].strip()
-            if "SELECT" in next_line.upper():
-                return next_line
+        if "Action Input:" in line:
+            # Check current line first
+            if "SELECT" in line.upper():
+                sql_start = line.upper().find("SELECT")
+                return line[sql_start:].strip()
+            # Check next line
+            if i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if "SELECT" in next_line.upper():
+                    return next_line
     
-    # Look for standalone SELECT statements
+    # Look for standalone SELECT statements (most permissive)
+    sql_lines = []
+    in_sql = False
     for line in lines:
-        line = line.strip()
-        if line.upper().startswith("SELECT ") and not line.upper().startswith("SELECT * FROM"):
-            return line
+        line_stripped = line.strip()
+        
+        # Start of SQL
+        if line_stripped.upper().startswith("SELECT "):
+            in_sql = True
+            sql_lines = [line_stripped]
+        # Continuation of SQL
+        elif in_sql:
+            # Stop conditions
+            if line_stripped == "" or line_stripped.startswith("#") or line_stripped.startswith("--"):
+                break
+            # End with semicolon
+            if ";" in line_stripped:
+                sql_lines.append(line_stripped)
+                break
+            # Continue SQL
+            sql_lines.append(line_stripped)
+    
+    if sql_lines:
+        return " ".join(sql_lines).strip()
     
     return None
 
@@ -597,19 +645,23 @@ def _build_prompt(question: str, use_device_scope: bool, schema_info: dict = Non
     groups = schema_info.get("table_groups", {})
     domain_parts = []
     
-    if any(t.startswith("device_") or t == "devices" for t in relevant_tables):
-        domain_parts.append(
-            "Device tables: Track device inventory, models, firmware, configuration, streams, health, "
-            "telemetry, events, permissions, groups, maintenance, and credentials."
-        )
-    
     if "data_raw" in relevant_tables:
         domain_parts.append(
-            "Data table: Contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems. "
-            "Fields include timestamp, device name, direction, vehicle type, license plate with OCR score. "
+            "Data table (data_raw): Contains vehicle detection data from ALPR (Automatic License Plate Recognition) systems. "
+            "IMPORTANT COLUMNS: local_timestamp (VARCHAR), device_name (VARCHAR - NOT device.name!), direction (VARCHAR), "
+            "vehicle_type (VARCHAR), vehicle_types_lp_ocr (TEXT), ocr_score (DECIMAL). "
             "The vehicle_types_lp_ocr field contains both type confidence score and license plate (format: '0.95 ABC-1234'). "
             "Device names follow pattern Device-{Letter}{Number}. Vehicle types are Car, Truck, Bus, Motorcycle. "
-            "Directions are Inbound/Outbound. OCR scores range from 0.0 to 1.0."
+            "Directions are Inbound/Outbound. OCR scores range from 0.0 to 1.0. "
+            "NOTE: data_raw.device_name is a string field, NOT a foreign key to devices table."
+        )
+    
+    if any(t == "devices" or t.startswith("device_") for t in relevant_tables):
+        domain_parts.append(
+            "Devices table: IMPORTANT COLUMNS - devices.id (BIGINT), devices.name (VARCHAR - NOT device_name!), "
+            "devices.device_uid (VARCHAR), devices.device_type (VARCHAR), devices.model_id (BIGINT), "
+            "devices.location_id (BIGINT), devices.status (VARCHAR), devices.timezone (VARCHAR). "
+            "To join data_raw to devices: JOIN devices ON data_raw.device_name = devices.name"
         )
     
     if any(t in ["reports", "report_members", "report_visualizations"] for t in relevant_tables):
@@ -773,7 +825,11 @@ Examples:
 Your answer:"""
             
             response = llm.invoke(validation_prompt)
-            response_text = response.content.strip().upper()
+            # Handle both string and object responses
+            if hasattr(response, 'content'):
+                response_text = response.content.strip().upper()
+            else:
+                response_text = str(response).strip().upper()
             
             if response_text.startswith("YES"):
                 return True, ""
@@ -1028,14 +1084,15 @@ def run_data_raw_agent(question: str) -> dict:
     enhanced_prompt = _build_prompt(question, use_device_scope, schema_info, include_tables)
 
     try:
-        # Try the standard agent first
+        # Try the standard agent first with reduced iterations to prevent infinite loops
         agent_executor = create_sql_agent(
             llm=llm,
             db=lc_db,
             agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
             verbose=True,
             handle_parsing_errors=True,
-            max_iterations=30,
+            max_iterations=10,  # Reduced from 30 to prevent infinite loops
+            early_stopping_method="generate"  # Stop early if stuck
         )
 
         result = agent_executor.invoke({"input": enhanced_prompt})
@@ -1221,7 +1278,11 @@ Important: Only use SELECT statements. Do not modify data.
             
             # Direct LLM call as fallback
             response = llm.invoke(fallback_prompt)
-            output_text = response.content.strip()
+            # Handle both string and object responses
+            if hasattr(response, 'content'):
+                output_text = response.content.strip()
+            else:
+                output_text = str(response).strip()
             
             # Try to extract SQL from the response
             executed_sql = None
@@ -1296,7 +1357,7 @@ Important: Only use SELECT statements. Do not modify data.
 
 def generate_sql_for_question(question: str) -> str | None:
     """
-    Use the SQL agent to generate a single final SQL query string for the question.
+    Use direct LLM prompting to generate SQL (bypasses agent to avoid infinite loops).
     Returns the SQL string if extracted, otherwise None.
     """
     configure_ollama_from_env()
@@ -1308,51 +1369,57 @@ def generate_sql_for_question(question: str) -> str | None:
 
     llm = _get_local_llm(temperature=0)
 
-    enhanced_prompt = _build_prompt(question, _is_device_query(question), schema_info, include_tables)
-
+    # Use direct SQL generation instead of agent to avoid infinite loops
     try:
-        agent_executor = create_sql_agent(
-            llm=llm,
-            db=lc_db,
-            agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-            verbose=False,
-            handle_parsing_errors=True,
-            max_iterations=30,
-        )
-        result = agent_executor.invoke({"input": enhanced_prompt})
-        output_text = result.get("output", "").strip()
+        sql_only_prompt = f"""You are a MySQL expert. Generate ONLY a valid SELECT query. No explanation, no markdown, no text.
 
-        executed_sql = None
-        for step in result.get("intermediate_steps", []):
-            if isinstance(step, tuple) and len(step) >= 2:
-                action = step[0]
-                observation = step[1]
-                if isinstance(action, str) and "SELECT" in action.upper():
-                    executed_sql = action
-                    break
-                if isinstance(observation, str) and "SELECT" in observation.upper():
-                    lines = observation.split('\n')
-                    for line in lines:
-                        if line.strip().upper().startswith("SELECT "):
-                            executed_sql = line.strip()
-                            break
-                    if executed_sql:
-                        break
+Database Schema:
+{lc_db.get_table_info()}
 
-        if not executed_sql:
-            executed_sql = _extract_sql_from_text(output_text)
+CRITICAL COLUMN NAME RULES:
+- data_raw table uses: device_name (NOT device.name!)
+- devices table uses: name (NOT device_name!)
+- To join data_raw to devices: JOIN devices ON data_raw.device_name = devices.name
+- data_raw.device_name is VARCHAR, devices.name is VARCHAR
+- For queries on devices, use devices.name as the column
+- For queries on data_raw, use data_raw.device_name as the column
 
-        # Fallback: direct LLM prompt for SQL only
-        if not executed_sql:
-            sql_only_prompt = (
-                "Return ONLY a single valid MySQL SELECT statement that answers the question. "
-                "No commentary."
-                f"\n\nSchema Info (tables you may use): {', '.join(include_tables)}\n\nQuestion: {question}"
-            )
-            response = llm.invoke(sql_only_prompt)
+Rules:
+- Return ONLY the SQL query, nothing else
+- No ```sql``` markers
+- No commentary or explanation
+- Use only SELECT statements
+- Columns x and y when requested must be aliased properly
+- Always use correct column names as specified above
+
+Question: {question}
+
+SQL:"""
+
+        response = llm.invoke(sql_only_prompt)
+        
+        # Handle both string and object responses
+        if hasattr(response, 'content'):
             text = response.content.strip()
-            executed_sql = _extract_sql_from_text(text) or (text if text.strip().upper().startswith("SELECT ") else None)
-
+        else:
+            text = str(response).strip()
+        
+        # Extract SQL from response
+        executed_sql = _extract_sql_from_text(text)
+        
+        # If extraction failed but text looks like SQL, use it directly
+        if not executed_sql and text.strip().upper().startswith("SELECT"):
+            executed_sql = text.strip()
+        
+        # Clean up the SQL (remove markdown if present)
+        if executed_sql:
+            executed_sql = executed_sql.strip()
+            # Remove markdown code blocks if present
+            if executed_sql.startswith("```"):
+                lines = executed_sql.split('\n')
+                executed_sql = '\n'.join([l for l in lines if not l.strip().startswith('```')])
+                executed_sql = executed_sql.strip()
+        
         return executed_sql
 
     except Exception as e:
