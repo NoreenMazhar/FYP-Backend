@@ -762,19 +762,28 @@ def _build_prompt(question: str, use_device_scope: bool, schema_info: dict = Non
 
     guardrails = (
         "Constraints: Use only read-only SELECTs; avoid DDL/DML. Execute the query and provide actual results. "
-        "If the query returns no results, state that clearly. Keep the language simple and direct.\n\n"
+        "If the query returns no results, state that clearly.\n\n"
         "IMPORTANT: Follow the ReAct format step by step:\n"
-        "1. Use 'Thought:' to explain what you're thinking\n"
+        "1. Use 'Thought:' to explain your analytical approach and reasoning\n"
         "2. Use 'Action:' to specify what tool you're using\n"
         "3. Use 'Action Input:' to provide the SQL query\n"
         "4. Use 'Observation:' to show the actual results from the database\n"
-        "5. Use 'Final Answer:' to provide your complete response in the markdown format specified above\n\n"
-        "Show your reasoning process clearly. For count queries like 'How many buses were detected':\n"
-        "1. First explain what you need to do\n"
+        "5. Use 'Final Answer:' to provide a comprehensive analysis with detailed insights\n\n"
+        "ANALYSIS REQUIREMENTS:\n"
+        "- Provide detailed numerical results with context and percentages\n"
+        "- Analyze data quality, confidence scores, and completeness\n"
+        "- Identify patterns, trends, and anomalies in the data\n"
+        "- Include temporal analysis if time-based data is relevant\n"
+        "- Assess device performance and reliability\n"
+        "- Provide business implications and recommendations\n"
+        "- Include technical details about query execution\n\n"
+        "For count queries like 'How many buses were detected':\n"
+        "1. Explain your analytical approach and what insights you're seeking\n"
         "2. Write the SQL query: SELECT COUNT(*) FROM data_raw WHERE vehicle_type = 'Bus'\n"
-        "3. Execute it and show the actual result\n"
-        "4. Provide the final answer with the real count\n\n"
-        "IMPORTANT: Always use the 'vehicle_type' column for vehicle type queries, NOT 'vehicle_types_lp_ocr'"
+        "3. Execute it and analyze the actual result in detail\n"
+        "4. Provide comprehensive analysis including context, patterns, and recommendations\n\n"
+        "IMPORTANT: Always use the 'vehicle_type' column for vehicle type queries, NOT 'vehicle_types_lp_ocr'\n"
+        "Provide thorough, professional analysis with specific numbers, percentages, and detailed insights."
     )
 
     return (
@@ -1013,39 +1022,83 @@ def _handle_license_plate_query(question: str, lc_db: SQLDatabase, llm) -> dict:
                 f"Average confidence level: {avg_ocr:.1%}" if avg_ocr <= 1.0 else f"Average confidence level: {avg_ocr:.1f}%"
             ]
         
+        # Create a detailed response without complex parsing
+        response_text = f"""# License Plate Analysis Report: {plate_number}
+
+## Executive Summary
+{overview}
+
+## Detailed Analysis
+{chr(10).join(f"- {finding}" for finding in key_findings)}
+
+## Data Quality Assessment
+- Detection Count: {count} occurrences
+- Average OCR Confidence: {avg_ocr:.6f} ({avg_ocr:.1%} if ≤1.0, else {avg_ocr:.1f}%)
+- Data Reliability: {'High' if avg_ocr > 0.8 else 'Medium' if avg_ocr > 0.5 else 'Low'}
+- Detection Frequency: {'Frequent' if count > 10 else 'Moderate' if count > 3 else 'Rare'}
+
+## Patterns & Insights
+{chr(10).join(f"- {obs}" for obs in observations)}
+
+## Technical Details
+- SQL Query Executed: `{sql_query}`
+- Query Type: COUNT aggregation with vehicle type filtering
+- Database Table: data_raw
+- Filter Condition: vehicle_type = 'Bus'
+- Result Processing: Direct count from database
+
+## Recommendations
+- {'Continue monitoring' if count > 0 else 'Investigate detection system' if count == 0 else 'Review data quality'}
+- {'High confidence detections' if avg_ocr > 0.8 else 'Consider improving OCR accuracy' if avg_ocr < 0.5 else 'Monitor OCR performance'}
+- {'Frequent detections suggest regular usage' if count > 10 else 'Infrequent detections may indicate special events' if count > 0 else 'No detections may indicate system issues'}
+
+## Additional Context
+- This analysis is based on ALPR (Automatic License Plate Recognition) data
+- OCR scores indicate the confidence level of license plate detection
+- Detection frequency can indicate vehicle usage patterns
+- Data quality assessment helps evaluate system reliability
+
+## Follow-up Questions
+{chr(10).join(f"- {q}" for q in [
+    f"What is the average OCR score for plate {plate_number}?",
+    f"How many times was plate {plate_number} detected?",
+    f"Show me all detections for plate {plate_number}",
+    f"What vehicle type is associated with plate {plate_number}?",
+    f"When was plate {plate_number} last detected?",
+    f"What are the peak detection times for plate {plate_number}?",
+    f"Which devices detected plate {plate_number} most frequently?"
+])}
+"""
+
         return {
             "question": question,
             "executed_sql": sql_query,
             "result": {
-                "Overview": overview,
-                "Key Findings": key_findings,
-                "SQL Used": f"```sql\n{sql_query}\n```",
-                "Observations": observations,
-                "Possible Questions": [
-                    f"What is the average OCR score for plate {plate_number}?",
-                    f"How many times was plate {plate_number} detected?",
-                    f"Show me all detections for plate {plate_number}",
-                    f"What vehicle type is associated with plate {plate_number}?",
-                    f"When was plate {plate_number} last detected?"
-                ]
+                "response": response_text,
+                "raw_llm_output": True
             },
             "used_device_scope": False
         }
         
     except Exception as e:
+        error_response = f"""Error processing query for plate {plate_number}: {str(e)}
+
+SQL Query: {sql_query}
+
+There was a technical issue with the query processing.
+
+Suggestions:
+- Try rephrasing the question
+- Check if the plate number is correct
+- Contact support if the issue persists
+"""
+
         return {
             "question": question,
             "executed_sql": sql_query,
             "result": {
-                "Overview": f"Error processing query for plate {plate_number}: {str(e)}",
-                "Key Findings": "An unexpected error occurred during processing.",
-                "SQL Used": f"```sql\n{sql_query}\n```",
-                "Observations": "There was a technical issue with the query processing.",
-                "Possible Questions": [
-                    "Try rephrasing the question",
-                    "Check if the plate number is correct",
-                    "Contact support if the issue persists"
-                ]
+                "response": error_response,
+                "raw_llm_output": True
             },
             "used_device_scope": False,
             "error": str(e)
@@ -1225,23 +1278,15 @@ def run_data_raw_agent(question: str) -> dict:
             except Exception as e:
                 logger.warning(f"Direct SQL execution error: {e}")
 
-        # Parse markdown result into key-value pairs
-        parsed_result = _parse_markdown_to_keyvalue(output_text)
-        # Fallback: if the model didn't follow the heading format, preserve the raw text
-        if not parsed_result:
-            if output_text:
-                parsed_result = {"Overview": output_text}
-            else:
-                parsed_result = {"Overview": "No answer was produced by the SQL agent."}
-        
-        # Add reasoning steps to the result if available
-        if reasoning_steps:
-            parsed_result["Agent_Reasoning"] = reasoning_steps
-        
+        # Return the direct LLM response without complex parsing
         return {
             "question": question,
             "executed_sql": executed_sql,
-            "result": parsed_result,
+            "result": {
+                "response": output_text,
+                "raw_llm_output": True,
+                "intermediate_steps": len(intermediate_steps)
+            },
             "used_device_scope": use_device_scope,
             "intermediate_steps_count": len(intermediate_steps),
         }
@@ -1307,57 +1352,11 @@ def run_data_raw_agent(question: str) -> dict:
                     except Exception as sql_e:
                         logger.warning(f"Failed to execute SQL from error message: {sql_e}")
         
-        # Fallback: Use direct LLM call with structured prompt
+        # Fallback: Use direct LLM call with simple prompt
         try:
-            # Check if this is a license plate query for specialized handling
-            question_lower = question.lower()
-            is_license_plate_query = any(term in question_lower for term in ['plate', 'license', 'ocr', 'average', 'score'])
-            
-            if is_license_plate_query:
-                fallback_prompt = f"""
-You are a SQL expert specializing in ALPR (Automatic License Plate Recognition) data analysis. 
-
-Database Schema:
-{lc_db.get_table_info()}
-
-Question: {question}
-
-CRITICAL DATA EXTRACTION RULES:
-- vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)
-- To extract license plate: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1)
-- To extract type score: SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1)
-- For average OCR score of specific plate: SELECT AVG(ocr_score) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'PLATE_NUMBER'
-- For count of detections: SELECT COUNT(*) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'PLATE_NUMBER'
-
-EXAMPLE QUERIES:
-- Average OCR for plate 'ABC123': SELECT AVG(ocr_score) FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'ABC123'
-- All detections of plate 'XYZ789': SELECT * FROM data_raw WHERE SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) = 'XYZ789'
-- Count by vehicle type: SELECT vehicle_type, COUNT(*) FROM data_raw GROUP BY vehicle_type
-
-Please provide your response in the following format:
-
-### Overview
-- [Direct answer about the license plate or OCR score]
-
-### Key Findings  
-- [Specific numbers: average OCR score, count of detections, date range, etc.]
-
-### SQL Used
-```sql
-[Your SQL query here]
-```
-
-### Observations
-- [Patterns, anomalies, or interesting findings about the license plate]
-
-### Possible Questions
-- [3-5 related follow-up questions about this license plate or similar analysis]
-
-Important: Only use SELECT statements. Execute the query and provide actual results.
-"""
-            else:
-                fallback_prompt = f"""
-You are a SQL expert. Given the following database schema and question, generate a SQL query and provide a structured response.
+            # Enhanced prompt for detailed responses
+            fallback_prompt = f"""
+You are a senior data analyst and SQL expert specializing in ALPR (Automatic License Plate Recognition) traffic monitoring systems. Given the following database schema and question, provide a comprehensive analysis.
 
 Database Schema:
 {lc_db.get_table_info()}
@@ -1365,6 +1364,7 @@ Database Schema:
 Question: {question}
 
 IMPORTANT DATA STRUCTURE NOTES:
+- For vehicle type queries, use: WHERE vehicle_type = 'Bus' (not vehicle_types_lp_ocr)
 - vehicle_types_lp_ocr format: '0.95 ABC-1234' (type_score + space + license_plate)
 - Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', 1) for type score
 - Use SUBSTRING_INDEX(vehicle_types_lp_ocr, ' ', -1) for license plate
@@ -1372,31 +1372,46 @@ IMPORTANT DATA STRUCTURE NOTES:
 - Vehicle types: Car, Truck, Bus, Motorcycle
 - Directions: Inbound, Outbound
 - OCR scores: 0.0-1.0 (decimal) or 0-100 (percentage)
-- Type scores: 0.0-1.0 (decimal from vehicle_types_lp_ocr)
 
-Please provide your response in the following format:
+ANALYSIS REQUIREMENTS:
+1. **SQL Query**: Write the most appropriate SQL query to answer the question
+2. **Execute & Analyze**: Run the query and analyze the actual results
+3. **Comprehensive Response**: Provide a detailed analysis including:
+   - Executive summary of findings
+   - Detailed numerical results with context
+   - Data quality insights (confidence scores, completeness)
+   - Temporal patterns if applicable (time-based analysis)
+   - Device performance insights if relevant
+   - Statistical significance and trends
+   - Potential anomalies or interesting patterns
+   - Business implications and recommendations
+   - Technical details about the query execution
 
-### Overview
-- [Brief answer to the question]
+RESPONSE FORMAT:
+Provide a comprehensive analysis in the following structure:
 
-### Key Findings  
-- [Important numbers, trends, or comparisons]
+## Executive Summary
+[Brief overview of key findings and numbers]
 
-### SQL Used
-```sql
-[Your SQL query here]
-```
+## Detailed Analysis
+[Comprehensive breakdown of the data with specific numbers, percentages, and context]
 
-### Observations
-- [Short insights or anomalies worth noting]
+## Data Quality Assessment
+[Analysis of data completeness, confidence scores, and reliability]
 
-### Next Steps
-- [2-3 concise suggestions for follow-up analysis]
+## Patterns & Insights
+[Identification of trends, anomalies, or interesting patterns in the data]
 
-### Possible Questions
-- [List 3-5 relevant follow-up questions the user might want to ask based on the current query and findings]
+## Technical Details
+[SQL query used, execution details, and technical considerations]
 
-Important: Only use SELECT statements. Do not modify data.
+## Recommendations
+[Actionable insights and next steps based on the analysis]
+
+## Additional Context
+[Related information that might be relevant to the analysis]
+
+Please provide a thorough, professional analysis with specific numbers, percentages, and detailed insights.
 """
             
             # Direct LLM call as fallback
@@ -1407,79 +1422,59 @@ Important: Only use SELECT statements. Do not modify data.
             else:
                 output_text = str(response).strip()
             
-            # Try to extract SQL from the response
+            # Try to extract and execute SQL from the response
             executed_sql = None
-            sql_results = None
-            if "```sql" in output_text:
-                start = output_text.find("```sql") + 6
-                end = output_text.find("```", start)
-                if end > start:
-                    executed_sql = output_text[start:end].strip()
-                    
-                    # Try to execute the SQL to get actual results
+            if "SELECT" in output_text.upper():
+                # Extract SQL from the response
+                lines = output_text.split('\n')
+                for line in lines:
+                    if line.strip().upper().startswith('SELECT'):
+                        executed_sql = line.strip()
+                        break
+                
+                # If no direct SELECT found, look for SQL in code blocks
+                if not executed_sql and "```" in output_text:
+                    start = output_text.find("```")
+                    end = output_text.find("```", start + 3)
+                    if end > start:
+                        sql_block = output_text[start:end+3]
+                        if "SELECT" in sql_block.upper():
+                            # Extract just the SELECT statement
+                            sql_lines = sql_block.split('\n')
+                            for line in sql_lines:
+                                if line.strip().upper().startswith('SELECT'):
+                                    executed_sql = line.strip()
+                                    break
+                
+                # Try to execute the SQL to get actual results
+                if executed_sql:
                     try:
                         sql_results, sql_error = _execute_sql_safely(lc_db, executed_sql)
-                        if sql_error:
-                            logger.warning(f"SQL execution failed: {sql_error}")
-                        else:
+                        if not sql_error and sql_results:
                             logger.info(f"SQL executed successfully, returned {len(sql_results)} results")
-                            # If we got results, we need to update the response with actual data
-                            if sql_results and len(sql_results) > 0:
-                                # Parse the results and update the response
-                                try:
-                                    # Convert results to a more readable format
-                                    if isinstance(sql_results, str):
-                                        # If it's a string, try to parse it
-                                        import re
-                                        numbers = re.findall(r'\d+', sql_results)
-                                        if numbers:
-                                            actual_count = int(numbers[0])
-                                        else:
-                                            actual_count = 0
-                                    else:
-                                        # If it's a list, get the first value
-                                        actual_count = int(sql_results[0]) if sql_results else 0
-                                    
-                                    # Update the response with actual results
-                                    if "### Overview" in output_text:
-                                        # Replace the fake overview with real data
-                                        overview_start = output_text.find("### Overview")
-                                        overview_end = output_text.find("###", overview_start + 1)
-                                        if overview_end == -1:
-                                            overview_end = len(output_text)
-                                        
-                                        new_overview = f"### Overview\n- There were {actual_count:,} buses detected in the data."
-                                        output_text = output_text[:overview_start] + new_overview + "\n\n" + output_text[overview_end:]
-                                    
-                                    if "### Key Findings" in output_text:
-                                        # Replace the fake key findings with real data
-                                        findings_start = output_text.find("### Key Findings")
-                                        findings_end = output_text.find("###", findings_start + 1)
-                                        if findings_end == -1:
-                                            findings_end = len(output_text)
-                                        
-                                        new_findings = f"### Key Findings\n- Total bus count: {actual_count:,}\n- This represents the actual number of bus detections in the database."
-                                        output_text = output_text[:findings_start] + new_findings + "\n\n" + output_text[findings_end:]
-                                        
-                                except Exception as parse_error:
-                                    logger.warning(f"Failed to parse SQL results: {parse_error}")
-                                    # Add the raw results to the response
-                                    output_text += f"\n\n**Actual SQL Results:** {sql_results}"
+                            # Add detailed results to the response
+                            if isinstance(sql_results, str):
+                                output_text += f"\n\n## Database Execution Results\n**Query:** `{executed_sql}`\n**Raw Results:** {sql_results}\n**Result Count:** {len(sql_results.split()) if sql_results else 0} values"
+                            else:
+                                output_text += f"\n\n## Database Execution Results\n**Query:** `{executed_sql}`\n**Raw Results:** {sql_results}\n**Result Count:** {len(sql_results)} rows"
+                            
+                            # Add execution metadata
+                            output_text += f"\n**Execution Status:** ✅ Success\n**Data Source:** data_raw table\n**Query Type:** {'COUNT' if 'COUNT' in executed_sql.upper() else 'SELECT' if 'SELECT' in executed_sql.upper() else 'UNKNOWN'}"
+                        else:
+                            logger.warning(f"SQL execution failed: {sql_error}")
+                            output_text += f"\n\n## Database Execution Results\n**Query:** `{executed_sql}`\n**Execution Status:** ❌ Failed\n**Error:** {sql_error}"
                     except Exception as sql_exec_error:
                         logger.warning(f"SQL execution error: {sql_exec_error}")
+                        output_text += f"\n\n## Database Execution Results\n**Query:** `{executed_sql}`\n**Execution Status:** ❌ Error\n**Error:** {sql_exec_error}"
             
-            # Parse markdown result into key-value pairs
-            parsed_result = _parse_markdown_to_keyvalue(output_text)
-            if not parsed_result:
-                if output_text:
-                    parsed_result = {"Overview": output_text}
-                else:
-                    parsed_result = {"Overview": "No answer was produced by the SQL agent."}
-            
+            # Return the direct LLM response without complex parsing
             return {
                 "question": question,
                 "executed_sql": executed_sql,
-                "result": parsed_result,
+                "result": {
+                    "response": output_text,
+                    "raw_llm_output": True
+                },
                 "used_device_scope": use_device_scope,
                 "fallback_used": True,
             }
