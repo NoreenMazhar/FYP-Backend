@@ -1,5 +1,6 @@
 import os
 from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field, model_validator
 from db import Database
 from auth import hash_password, verify_password, create_jwt
@@ -49,6 +50,9 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
 	email: EmailStr
 	password: str
+
+class EmailListResponse(BaseModel):
+	emails: List[EmailStr]
 
 class QueryRequest(BaseModel):
 	query: str
@@ -402,7 +406,7 @@ def register(payload: RegisterRequest, db: Database = Depends(get_db)):
 		existing = db.execute("SELECT id FROM users WHERE email=%s", (payload.email,))
 		if existing:
 			logger.info(f"User {payload.email} already exists")
-			raise HTTPException(status_code=409, detail="User already exists")
+			return JSONResponse(status_code=409, content={"detail": "Registration failed as user already exists"})
 
 		password_hash = hash_password(payload.password)
 		logger.info(f"Hashing password for user {payload.email}")
@@ -421,6 +425,9 @@ def register(payload: RegisterRequest, db: Database = Depends(get_db)):
 		return {"access_token": token, "token_type": "bearer", "user": user}
 	except ValueError as ve:
 		raise HTTPException(status_code=422, detail=str(ve))
+	except HTTPException:
+		# Re-raise HTTPExceptions (e.g., 409 user exists) without converting to 500
+		raise
 	except Exception as e:
 		logger.exception(f"Registration failed for {payload.email}")
 		raise HTTPException(status_code=500, detail="Registration failed")
@@ -435,6 +442,16 @@ def login(payload: LoginRequest, db: Database = Depends(get_db)):
 		raise HTTPException(status_code=401, detail="Invalid credentials")
 	token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
 	return {"access_token": token, "token_type": "bearer", "user": {"id": user["id"], "email": user["email"], "display_name": user["display_name"], "user_type": user["user_type"]}}
+
+@app.get("/auth/emails", response_model=EmailListResponse)
+def list_registered_emails(db: Database = Depends(get_db)):
+	try:
+		rows = db.execute("SELECT email FROM users ORDER BY created_at DESC")
+		emails = [row["email"] for row in rows] if rows else []
+		return EmailListResponse(emails=emails)
+	except Exception as exc:
+		logger.exception("Failed to fetch registered emails")
+		raise HTTPException(status_code=500, detail="Failed to fetch registered emails") from exc
 
 @app.get("/vehicle-detections", response_model=VehicleDetectionsResponse)
 def get_vehicle_detections(
