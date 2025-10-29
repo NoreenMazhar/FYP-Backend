@@ -1584,3 +1584,41 @@ def delete_report(
 		logger.exception(f"Failed to delete report {report_id}")
 		raise HTTPException(status_code=500, detail="Failed to delete report") from exc
 
+
+@app.get("/visualizations")
+def list_visualizations(
+		db: Database = Depends(get_db),
+		limit: int = Query(10, description="Number of visualizations to return"),
+		offset: int = Query(0, description="Number of visualizations to skip")
+):
+	"""
+	Get a list of visualizations with basic information.
+	"""
+	try:
+		logger.info("Fetching visualizations list...")
+		visualizations = db.execute(
+			"""
+			SELECT 
+				id,
+				title,
+				viz_type,
+				config,
+				created_by,
+				created_at
+			FROM visualizations
+			ORDER BY created_at DESC
+			LIMIT %s OFFSET %s
+			""",
+			(limit, offset)
+		)
+		count_result = db.execute("SELECT COUNT(*) as total FROM visualizations")
+		total_count = count_result[0]['total'] if count_result else 0
+		return {
+			"visualizations": visualizations or [],
+			"total_count": total_count,
+			"limit": limit,
+			"offset": offset
+		}
+	except Exception as exc:
+		logger.exception("Failed to get visualizations")
+		raise HTTPException(status_code=500, detail="Failed to retrieve visualizations") from exc
