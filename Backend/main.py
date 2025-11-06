@@ -18,6 +18,7 @@ from sql_agent import (
 from Anomaly_Detection import detect_anomalies, get_anomaly_summary
 from plots import get_2d_plots_via_agent, convert_text_to_plots
 from report_generator import generate_comprehensive_report
+from email_service import get_email_service
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -141,6 +142,31 @@ class DetailedDeviceResponse(BaseModel):
 	metrics: DeviceMetrics
 	created_at: datetime
 	updated_at: datetime
+
+class SendEmailRequest(BaseModel):
+	to_email: EmailStr
+	subject: str
+	body: str
+	body_html: Optional[str] = None
+	cc: Optional[List[EmailStr]] = None
+	bcc: Optional[List[EmailStr]] = None
+
+class SendBulkEmailRequest(BaseModel):
+	to_emails: List[EmailStr]
+	subject: str
+	body: str
+	body_html: Optional[str] = None
+
+class SendReportEmailRequest(BaseModel):
+	to_email: EmailStr
+	report_id: Optional[int] = None  # If provided, send existing report
+	start_date: Optional[date] = None  # If report_id not provided, generate new report
+	end_date: Optional[date] = None
+	title: Optional[str] = None
+	description: Optional[str] = None
+	cc: Optional[List[EmailStr]] = None
+	bcc: Optional[List[EmailStr]] = None
+	created_by: Optional[int] = None
 
 
 def get_db() -> Database:
@@ -1622,3 +1648,189 @@ def list_visualizations(
 	except Exception as exc:
 		logger.exception("Failed to get visualizations")
 		raise HTTPException(status_code=500, detail="Failed to retrieve visualizations") from exc
+
+
+@app.post("/email/send")
+def send_email(payload: SendEmailRequest):
+	"""
+	Send an email using Gmail SMTP credentials from environment variables.
+	Requires GMAIL_USER and GMAIL_APP_PASSWORD to be set in .env file.
+	"""
+	try:
+		logger.info(f"Sending email to {payload.to_email}")
+		
+		email_service = get_email_service()
+		
+		# Convert Pydantic EmailStr to strings for CC and BCC
+		cc_list = [str(email) for email in payload.cc] if payload.cc else None
+		bcc_list = [str(email) for email in payload.bcc] if payload.bcc else None
+		
+		success = email_service.send_email(
+			to_email=str(payload.to_email),
+			subject=payload.subject,
+			body=payload.body,
+			body_html=payload.body_html,
+			cc=cc_list,
+			bcc=bcc_list
+		)
+		
+		if success:
+			return {
+				"message": "Email sent successfully",
+				"to": str(payload.to_email),
+				"subject": payload.subject
+			}
+		else:
+			raise HTTPException(
+				status_code=500,
+				detail="Failed to send email. Please check your Gmail credentials in .env file."
+			)
+			
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception("Failed to send email")
+		raise HTTPException(status_code=500, detail="Failed to send email") from exc
+
+
+@app.post("/email/send-report")
+def send_report_email(payload: SendReportEmailRequest, db: Database = Depends(get_db)):
+	"""
+	Send a report as an email. 
+	Either provide report_id to send an existing report, or provide start_date/end_date to generate and send a new report.
+	Requires GMAIL_USER and GMAIL_APP_PASSWORD to be set in .env file.
+	"""
+	try:
+		logger.info(f"Sending report email to {payload.to_email}")
+		
+		email_service = get_email_service()
+		report_data = None
+		
+		# If report_id is provided, fetch existing report
+		if payload.report_id:
+			logger.info(f"Fetching existing report {payload.report_id}")
+			
+			# Get report from database
+			report = db.execute("""
+				SELECT 
+					r.id,
+					r.title,
+					r.description,
+					r.created_at,
+					v.config
+				FROM reports r
+				LEFT JOIN report_visualizations rv ON r.id = rv.report_id
+				LEFT JOIN visualizations v ON rv.visualization_id = v.id
+				WHERE r.id = %s
+				ORDER BY rv.position
+				LIMIT 1
+			""", (payload.report_id,))
+			
+			if not report:
+				raise HTTPException(status_code=404, detail=f"Report with ID {payload.report_id} not found")
+			
+			report = report[0]
+			
+			# Parse report data from visualization config
+			config = report.get('config', {})
+			if isinstance(config, str):
+				config = json.loads(config)
+			
+			# Reconstruct report data structure
+			report_data = {
+				"report_id": report['id'],
+				"title": report.get('title', 'Traffic Monitoring Report'),
+				"description": report.get('description'),
+				"period": {
+					"start_date": config.get('start_date', ''),
+					"end_date": config.get('end_date', '')
+				},
+				"generated_at": report.get('created_at').isoformat() if report.get('created_at') else datetime.now().isoformat(),
+				"executive_summary": config.get('summary', {}),
+				"sections": config.get('sections', []),
+				"statistics": config.get('statistics', {}),
+				"anomalies_summary": config.get('anomalies_summary', {})
+			}
+		else:
+			# Generate new report
+			if not payload.start_date or not payload.end_date:
+				raise HTTPException(
+					status_code=400,
+					detail="Either report_id must be provided, or both start_date and end_date must be provided"
+				)
+			
+			logger.info(f"Generating new report for period {payload.start_date} to {payload.end_date}")
+			report_data = generate_comprehensive_report(
+				start_date=payload.start_date,
+				end_date=payload.end_date,
+				title=payload.title,
+				description=payload.description,
+				created_by=payload.created_by,
+				db=db
+			)
+		
+		# Convert Pydantic EmailStr to strings for CC and BCC
+		cc_list = [str(email) for email in payload.cc] if payload.cc else None
+		bcc_list = [str(email) for email in payload.bcc] if payload.bcc else None
+		
+		# Send report via email
+		success = email_service.send_report_email(
+			to_email=str(payload.to_email),
+			report_data=report_data,
+			cc=cc_list,
+			bcc=bcc_list
+		)
+		
+		if success:
+			return {
+				"message": "Report email sent successfully",
+				"to": str(payload.to_email),
+				"report_id": report_data.get('report_id'),
+				"report_title": report_data.get('title'),
+				"subject": report_data.get('title', 'Traffic Monitoring Report')
+			}
+		else:
+			raise HTTPException(
+				status_code=500,
+				detail="Failed to send report email. Please check your Gmail credentials in .env file."
+			)
+			
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception("Failed to send report email")
+		raise HTTPException(status_code=500, detail="Failed to send report email") from exc
+
+
+@app.post("/email/send-bulk")
+def send_bulk_email(payload: SendBulkEmailRequest):
+	"""
+	Send email to multiple recipients using Gmail SMTP credentials.
+	Requires GMAIL_USER and GMAIL_APP_PASSWORD to be set in .env file.
+	"""
+	try:
+		logger.info(f"Sending bulk email to {len(payload.to_emails)} recipients")
+		
+		email_service = get_email_service()
+		
+		# Convert Pydantic EmailStr to strings
+		to_emails_list = [str(email) for email in payload.to_emails]
+		
+		results = email_service.send_bulk_email(
+			to_emails=to_emails_list,
+			subject=payload.subject,
+			body=payload.body,
+			body_html=payload.body_html
+		)
+		
+		return {
+			"message": "Bulk email sending completed",
+			"success_count": results["success_count"],
+			"failed_count": results["failed_count"],
+			"failed_emails": results["failed_emails"],
+			"total_recipients": len(payload.to_emails)
+		}
+		
+	except Exception as exc:
+		logger.exception("Failed to send bulk email")
+		raise HTTPException(status_code=500, detail="Failed to send bulk email") from exc
