@@ -1653,7 +1653,7 @@ def list_visualizations(
 @app.post("/email/send")
 def send_email(payload: SendEmailRequest):
 	"""
-	Send an email using Gmail SMTP credentials from environment variables.
+	Send an email using Gmail SMTP.
 	Requires GMAIL_USER and GMAIL_APP_PASSWORD to be set in .env file.
 	"""
 	try:
@@ -1683,7 +1683,7 @@ def send_email(payload: SendEmailRequest):
 		else:
 			raise HTTPException(
 				status_code=500,
-				detail="Failed to send email. Please check your Gmail credentials in .env file."
+				detail="Failed to send email. Please check your Gmail credentials in .env file (GMAIL_USER and GMAIL_APP_PASSWORD)."
 			)
 			
 	except HTTPException:
@@ -1792,7 +1792,7 @@ def send_report_email(payload: SendReportEmailRequest, db: Database = Depends(ge
 		else:
 			raise HTTPException(
 				status_code=500,
-				detail="Failed to send report email. Please check your Gmail credentials in .env file."
+				detail="Failed to send report email. Please check your Gmail credentials in .env file (GMAIL_USER and GMAIL_APP_PASSWORD)."
 			)
 			
 	except HTTPException:
@@ -1805,7 +1805,7 @@ def send_report_email(payload: SendReportEmailRequest, db: Database = Depends(ge
 @app.post("/email/send-bulk")
 def send_bulk_email(payload: SendBulkEmailRequest):
 	"""
-	Send email to multiple recipients using Gmail SMTP credentials.
+	Send email to multiple recipients using Gmail SMTP.
 	Requires GMAIL_USER and GMAIL_APP_PASSWORD to be set in .env file.
 	"""
 	try:

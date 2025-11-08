@@ -22,23 +22,17 @@ class EmailService:
 		self.gmail_user = os.getenv("GMAIL_USER")
 		self.gmail_app_password = os.getenv("GMAIL_APP_PASSWORD")
 		
-		if not self.gmail_user or not self.gmail_app_password:
-			logger.warning(
-				"Gmail credentials not found in environment variables. "
-				"Please set GMAIL_USER and GMAIL_APP_PASSWORD in your .env file."
-			)
-	
 	def send_email(
-		self,
-		to_email: str,
-		subject: str,
-		body: str,
-		body_html: Optional[str] = None,
-		from_email: Optional[str] = None,
-		cc: Optional[List[str]] = None,
-		bcc: Optional[List[str]] = None,
-		attachments: Optional[List[str]] = None
-	) -> bool:
+			self,
+			to_email: str,
+			subject: str,
+			body: str,
+			body_html: Optional[str] = None,
+			from_email: Optional[str] = None,
+			cc: Optional[List[str]] = None,
+			bcc: Optional[List[str]] = None,
+			attachments: Optional[List[str]] = None
+		) -> bool:
 		"""
 		Send an email using Gmail SMTP.
 		
@@ -115,13 +109,13 @@ class EmailService:
 			return False
 	
 	def send_bulk_email(
-		self,
-		to_emails: List[str],
-		subject: str,
-		body: str,
-		body_html: Optional[str] = None,
-		from_email: Optional[str] = None
-	) -> dict:
+			self,
+			to_emails: List[str],
+			subject: str,
+			body: str,
+			body_html: Optional[str] = None,
+			from_email: Optional[str] = None
+		) -> dict:
 		"""
 		Send email to multiple recipients.
 		
@@ -392,8 +386,6 @@ class EmailService:
 				</div>
 				"""
 			
-			# Note: Visualizations would need to be converted to images or embedded
-			# For now, we'll just note that visualizations are available
 			visualization = section.get('visualization')
 			if visualization:
 				html += f"""
@@ -439,13 +431,13 @@ class EmailService:
 		return html
 	
 	def send_report_email(
-		self,
-		to_email: str,
-		report_data: Dict[str, Any],
-		from_email: Optional[str] = None,
-		cc: Optional[List[str]] = None,
-		bcc: Optional[List[str]] = None
-	) -> bool:
+			self,
+			to_email: str,
+			report_data: Dict[str, Any],
+			from_email: Optional[str] = None,
+			cc: Optional[List[str]] = None,
+			bcc: Optional[List[str]] = None
+		) -> bool:
 		"""
 		Send a report as an email with HTML formatting.
 		
@@ -461,16 +453,16 @@ class EmailService:
 		"""
 		# Generate plain text version
 		plain_text = f"""
-{report_data.get('title', 'Traffic Monitoring Report')}
+		{report_data.get('title', 'Traffic Monitoring Report')}
 
-Report Period: {report_data.get('period', {}).get('start_date', 'N/A')} to {report_data.get('period', {}).get('end_date', 'N/A')}
-Generated At: {report_data.get('generated_at', 'N/A')}
+		Report Period: {report_data.get('period', {}).get('start_date', 'N/A')} to {report_data.get('period', {}).get('end_date', 'N/A')}
+		Generated At: {report_data.get('generated_at', 'N/A')}
 
-Executive Summary:
-{report_data.get('executive_summary', {}).get('overview', 'N/A')}
+		Executive Summary:
+		{report_data.get('executive_summary', {}).get('overview', 'N/A')}
 
-Key Statistics:
-"""
+		Key Statistics:
+		"""
 		stats = report_data.get('statistics', {})
 		for key, value in stats.items():
 			if value is not None:
@@ -504,4 +496,3 @@ def get_email_service() -> EmailService:
 	if _email_service is None:
 		_email_service = EmailService()
 	return _email_service
-
