@@ -95,6 +95,18 @@ class UpdateUserTypeRequest(BaseModel):
 class UpdateAnomalyStatusRequest(BaseModel):
 	status: str = Field(pattern="^(active|resolved)$")
 
+class DetectionRequest(BaseModel):
+	localTimestamp: str  # ISO format: 2025-07-07T11:34:46.861Z
+	deviceName: str
+	direction: str = Field(pattern="^(approaching|receding)$")
+	vehicleType: str
+	vehicleTypeScore: float = Field(ge=0.0, le=1.0)
+	lpOcr: str  # License plate
+	ocrScore: float = Field(ge=0.0, le=1.0)
+
+class BulkDetectionRequest(BaseModel):
+	detections: List[DetectionRequest]
+
 class DeviceResponse(BaseModel):
 	id: int
 	device_uid: str
@@ -650,6 +662,199 @@ def list_registered_emails(db: Database = Depends(get_db)):
 	except Exception as exc:
 		logger.exception("Failed to fetch registered emails")
 		raise HTTPException(status_code=500, detail="Failed to fetch registered emails") from exc
+
+@app.post("/detections")
+def create_detection(
+		payload: DetectionRequest,
+		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user)
+	):
+	"""
+	Insert a single vehicle detection from a device/model.
+	Accepts data in the format: localTimestamp, deviceName, direction, vehicleType, 
+	vehicleTypeScore, lpOcr, ocrScore.
+	Automatically maps direction (approaching→Inbound, receding→Outbound) and 
+	combines vehicleTypeScore + lpOcr into vehicle_types_lp_ocr field.
+	"""
+	try:
+		logger.info(f"Inserting detection from device: {payload.deviceName}")
+		
+		# Map direction: approaching → Inbound, receding → Outbound
+		direction_mapped = "Inbound" if payload.direction == "approaching" else "Outbound"
+		
+		# Convert ISO timestamp to MySQL datetime format
+		try:
+			if 'T' in payload.localTimestamp:
+				# Handle ISO format with milliseconds and Z timezone
+				timestamp_str = payload.localTimestamp.replace('Z', '+00:00')
+				dt = datetime.fromisoformat(timestamp_str)
+				local_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+			else:
+				local_timestamp = payload.localTimestamp
+		except Exception as e:
+			logger.warning(f"Timestamp conversion failed, using as-is: {e}")
+			local_timestamp = payload.localTimestamp
+		
+		# Combine vehicleTypeScore + lpOcr into vehicle_types_lp_ocr
+		vehicle_types_lp_ocr = f"{payload.vehicleTypeScore} {payload.lpOcr}"
+		
+		# Check if device exists (by device_name or device_uid)
+		device = db.execute(
+			"SELECT id, device_uid, name, status FROM devices WHERE name=%s OR device_uid=%s",
+			(payload.deviceName, payload.deviceName)
+		)
+		
+		device_id = None
+		if device:
+			device_id = device[0]['id']
+			# Update device status to active if it was inactive
+			if device[0]['status'] == 'inactive':
+				db.execute(
+					"UPDATE devices SET status='active', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+					(device_id,)
+				)
+				logger.info(f"Device {payload.deviceName} status updated to active")
+		else:
+			logger.warning(f"Device {payload.deviceName} not found in database. Detection will be inserted but device should be registered.")
+		
+		# Insert detection into data_raw table
+		result = db.execute(
+			"""
+			INSERT INTO data_raw 
+			(local_timestamp, device_name, direction, vehicle_type, vehicle_types_lp_ocr, ocr_score)
+			VALUES (%s, %s, %s, %s, %s, %s)
+			""",
+			(
+				local_timestamp,
+				payload.deviceName,
+				direction_mapped,
+				payload.vehicleType,
+				vehicle_types_lp_ocr,
+				payload.ocrScore
+			)
+		)
+		
+		# Get the inserted record ID
+		inserted_id = db.execute("SELECT LAST_INSERT_ID() as id")
+		detection_id = inserted_id[0]['id'] if inserted_id else None
+		
+		logger.info(f"Successfully inserted detection {detection_id} from device {payload.deviceName}")
+		
+		return {
+			"message": "Detection inserted successfully",
+			"detection_id": detection_id,
+			"device_name": payload.deviceName,
+			"device_registered": device_id is not None,
+			"direction_mapped": direction_mapped,
+			"timestamp": local_timestamp
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to insert detection from device {payload.deviceName}")
+		raise HTTPException(status_code=500, detail="Failed to insert detection") from exc
+
+
+@app.post("/detections/bulk")
+def create_bulk_detections(
+		payload: BulkDetectionRequest,
+		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user)
+	):
+	"""
+	Insert multiple vehicle detections in a single request.
+	Accepts an array of detections in the same format as single detection.
+	Returns summary of inserted detections and any errors.
+	"""
+	try:
+		logger.info(f"Inserting {len(payload.detections)} detections in bulk")
+		
+		successful_inserts = []
+		failed_inserts = []
+		
+		for idx, detection in enumerate(payload.detections):
+			try:
+				# Map direction: approaching → Inbound, receding → Outbound
+				direction_mapped = "Inbound" if detection.direction == "approaching" else "Outbound"
+				
+				# Convert ISO timestamp to MySQL datetime format
+				try:
+					if 'T' in detection.localTimestamp:
+						timestamp_str = detection.localTimestamp.replace('Z', '+00:00')
+						dt = datetime.fromisoformat(timestamp_str)
+						local_timestamp = dt.strftime('%Y-%m-%d %H:%M:%S')
+					else:
+						local_timestamp = detection.localTimestamp
+				except Exception as e:
+					logger.warning(f"Timestamp conversion failed for detection {idx}, using as-is: {e}")
+					local_timestamp = detection.localTimestamp
+				
+				# Combine vehicleTypeScore + lpOcr into vehicle_types_lp_ocr
+				vehicle_types_lp_ocr = f"{detection.vehicleTypeScore} {detection.lpOcr}"
+				
+				# Check if device exists
+				device = db.execute(
+					"SELECT id, status FROM devices WHERE name=%s OR device_uid=%s",
+					(detection.deviceName, detection.deviceName)
+				)
+				
+				if device and device[0]['status'] == 'inactive':
+					db.execute(
+						"UPDATE devices SET status='active', updated_at=CURRENT_TIMESTAMP WHERE id=%s",
+						(device[0]['id'],)
+					)
+				
+				# Insert detection
+				db.execute(
+					"""
+					INSERT INTO data_raw 
+					(local_timestamp, device_name, direction, vehicle_type, vehicle_types_lp_ocr, ocr_score)
+					VALUES (%s, %s, %s, %s, %s, %s)
+					""",
+					(
+						local_timestamp,
+						detection.deviceName,
+						direction_mapped,
+						detection.vehicleType,
+						vehicle_types_lp_ocr,
+						detection.ocrScore
+					)
+				)
+				
+				successful_inserts.append({
+					"index": idx,
+					"device_name": detection.deviceName,
+					"direction": direction_mapped,
+					"timestamp": local_timestamp
+				})
+				
+			except Exception as e:
+				logger.error(f"Failed to insert detection at index {idx}: {e}")
+				failed_inserts.append({
+					"index": idx,
+					"device_name": detection.deviceName if hasattr(detection, 'deviceName') else "unknown",
+					"error": str(e)
+				})
+				continue
+		
+		logger.info(f"Bulk insert completed: {len(successful_inserts)} successful, {len(failed_inserts)} failed")
+		
+		return {
+			"message": "Bulk detection insert completed",
+			"total_requested": len(payload.detections),
+			"successful_count": len(successful_inserts),
+			"failed_count": len(failed_inserts),
+			"successful_inserts": successful_inserts,
+			"failed_inserts": failed_inserts if failed_inserts else None
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception("Failed to insert bulk detections")
+		raise HTTPException(status_code=500, detail="Failed to insert bulk detections") from exc
+
 
 @app.get("/vehicle-detections", response_model=VehicleDetectionsResponse)
 def get_vehicle_detections(

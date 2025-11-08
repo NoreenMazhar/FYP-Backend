@@ -164,6 +164,19 @@ python test_local_model.py
 | `/devices/{device_id}/metrics`   | GET    | Get device performance metrics        | None                                                                                                    | `{"device_id": 1, "device_name": "Device-A1", "metrics": {...}, "last_updated": "..."}`                    | Yes           |
 | `/devices/{device_id}/telemetry` | POST   | Add device telemetry data             | Query params: `metric_name`, `metric_value`, `metric_units`                                             | `{"message": "Telemetry data added successfully", ...}`                                                    | Yes           |
 
+### Detection Data Routes
+
+| Route                 | Method | Description                            | Request Body                                                                                                                                             | Response                                                                                                   | Auth Required |
+| --------------------- | ------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- |
+| `/detections`         | POST   | Insert single vehicle detection        | `{"localTimestamp": "2025-07-07T11:34:46.861Z", "deviceName": "neom6", "direction": "approaching", "vehicleType": "Pickup & Mintruck", "vehicleTypeScore": 0.999, "lpOcr": "X4BUTQE", "ocrScore": 0.999}` | `{"message": "Detection inserted successfully", "detection_id": 123, "device_name": "neom6", "device_registered": true, "direction_mapped": "Inbound"}` | Yes           |
+| `/detections/bulk`    | POST   | Insert multiple vehicle detections    | `{"detections": [{"localTimestamp": "...", "deviceName": "...", "direction": "approaching", "vehicleType": "...", "vehicleTypeScore": 0.999, "lpOcr": "...", "ocrScore": 0.999}, ...]}` | `{"message": "Bulk detection insert completed", "total_requested": 10, "successful_count": 10, "failed_count": 0}` | Yes           |
+
+**Note:** 
+- Direction values: `"approaching"` → `"Inbound"`, `"receding"` → `"Outbound"` (automatically mapped)
+- Timestamp format: ISO format with milliseconds (e.g., `2025-07-07T11:34:46.861Z`) is automatically converted to MySQL datetime format
+- `vehicle_types_lp_ocr` field is automatically constructed from `vehicleTypeScore + lpOcr`
+- Device validation: If device exists, status is updated to "active" if inactive. Detection is still inserted even if device is not registered.
+
 ### Data Analysis Routes
 
 | Route                 | Method | Description                            | Request Body                                                                                                                                             | Response                                                                                                   | Auth Required |

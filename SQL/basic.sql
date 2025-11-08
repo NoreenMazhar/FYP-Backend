@@ -17,7 +17,7 @@ CREATE TABLE data_raw (
   device_name           VARCHAR(255) NOT NULL,                    -- device name
   direction             VARCHAR(100) NOT NULL,                    -- direction (approaching/receding)
   vehicle_type          VARCHAR(100) NOT NULL,                    -- vehicle type (Pickup & Mini/Truck/Bus)
-  vehicle_types_lp_ocr  TEXT NOT NULL,                            -- combined field with type score and license plate
+  vehicle_types_lp_ocr  TEXT NOT NULL,                            -- field with license plate
   ocr_score             DECIMAL(10,9) NOT NULL,                   -- OCR confidence score
   
   -- Add indexes for better query performance
