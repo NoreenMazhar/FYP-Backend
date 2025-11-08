@@ -135,64 +135,78 @@ python test_local_model.py
 
 ## API Routes Reference
 
+**Note:** Most routes require JWT authentication when `REQUIRE_JWT_AUTH=True` in `.env`. Include `Authorization: Bearer <token>` header.
+
 ### Authentication Routes
 
-| Route            | Method | Description         | Request Body                                                                                               | Response                                                               |
-| ---------------- | ------ | ------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `/auth/register` | POST   | Register a new user | `{"email": "user@example.com", "password": "password", "display_name": "User Name", "user_type": "admin"}` | `{"access_token": "jwt_token", "token_type": "bearer", "user": {...}}` |
-| `/auth/login`    | POST   | Login user          | `{"email": "user@example.com", "password": "password"}`                                                    | `{"access_token": "jwt_token", "token_type": "bearer", "user": {...}}` |
+| Route            | Method | Description            | Request Body                                                                                               | Response                                                               | Auth Required |
+| ---------------- | ------ | ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------- |
+| `/auth/register` | POST   | Register a new user    | `{"email": "user@example.com", "password": "password", "display_name": "User Name", "user_type": "admin"}` | `{"access_token": "jwt_token", "token_type": "bearer", "user": {...}}` | No            |
+| `/auth/login`    | POST   | Login user             | `{"email": "user@example.com", "password": "password"}`                                                    | `{"access_token": "jwt_token", "token_type": "bearer", "user": {...}}` | No            |
+| `/auth/emails`   | GET    | List registered emails | None                                                                                                       | `{"emails": ["user1@example.com", "user2@example.com"]}`               | No            |
 
 ### User Management Routes
 
-| Route           | Method | Description                          | Request Body                                          | Response                                                         |
-| --------------- | ------ | ------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------------------- |
-| `/users/status` | PUT    | Update user status (active/inactive) | `{"email": "user@example.com", "status": true}`       | `{"message": "User status updated successfully", "user": {...}}` |
-| `/users/type`   | PUT    | Update user type                     | `{"email": "user@example.com", "user_type": "admin"}` | `{"message": "User type updated successfully", "user": {...}}`   |
+| Route           | Method | Description                          | Request Body                                          | Response                                                         | Auth Required |
+| --------------- | ------ | ------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------------------- | ------------- |
+| `/users/status` | PUT    | Update user status (active/inactive) | `{"email": "user@example.com", "status": true}`       | `{"message": "User status updated successfully", "user": {...}}` | Yes           |
+| `/users/type`   | PUT    | Update user type                     | `{"email": "user@example.com", "user_type": "admin"}` | `{"message": "User type updated successfully", "user": {...}}`   | Yes           |
 
 ### Device Management Routes
 
-| Route                            | Method | Description                           | Request Body                                                                                            | Response                                                                                                   |
-| -------------------------------- | ------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `/devices`                       | GET    | Get all devices list                  | None                                                                                                    | `{"devices": [...], "total_count": 5}`                                                                     |
-| `/devices`                       | POST   | Add new device                        | `{"device_uid": "A1", "name": "Device-A1", "device_type": "camera", "model_id": 1, "status": "active"}` | `{"message": "Device added successfully", "device": {...}}`                                                |
-| `/devices/{device_id}`           | PUT    | Update device information             | `{"name": "New Name", "status": "active"}`                                                              | `{"message": "Device updated successfully", "device": {...}}`                                              |
-| `/devices/{device_id}`           | DELETE | Delete device                         | None                                                                                                    | `{"message": "Device deleted successfully", "deleted_device": {...}}`                                      |
-| `/devices/{device_id}/details`   | GET    | Get detailed device info with metrics | None                                                                                                    | `{"id": 1, "device_uid": "A1", "name": "Device-A1", "status": "Online", "uptime": 99.9, "metrics": {...}}` |
-| `/devices/{device_id}/metrics`   | GET    | Get device performance metrics        | None                                                                                                    | `{"device_id": 1, "device_name": "Device-A1", "metrics": {...}, "last_updated": "..."}`                    |
-| `/devices/{device_id}/telemetry` | POST   | Add device telemetry data             | Query params: `metric_name`, `metric_value`, `metric_units`                                             | `{"message": "Telemetry data added successfully", ...}`                                                    |
+| Route                            | Method | Description                           | Request Body                                                                                            | Response                                                                                                   | Auth Required |
+| -------------------------------- | ------ | ------------------------------------- | ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- |
+| `/devices`                       | GET    | Get all devices list                  | None                                                                                                    | `{"devices": [...], "total_count": 5}`                                                                     | Yes           |
+| `/devices`                       | POST   | Add new device                        | `{"device_uid": "A1", "name": "Device-A1", "device_type": "camera", "model_id": 1, "status": "active"}` | `{"message": "Device added successfully", "device": {...}}`                                                | Yes           |
+| `/devices/{device_id}`           | PUT    | Update device information             | `{"name": "New Name", "status": "active"}`                                                              | `{"message": "Device updated successfully", "device": {...}}`                                              | Yes           |
+| `/devices/{device_id}`           | DELETE | Delete device                         | None                                                                                                    | `{"message": "Device deleted successfully", "deleted_device": {...}}`                                      | Yes           |
+| `/devices/{device_id}/details`   | GET    | Get detailed device info with metrics | None                                                                                                    | `{"id": 1, "device_uid": "A1", "name": "Device-A1", "status": "Online", "uptime": 99.9, "metrics": {...}}` | Yes           |
+| `/devices/{device_id}/metrics`   | GET    | Get device performance metrics        | None                                                                                                    | `{"device_id": 1, "device_name": "Device-A1", "metrics": {...}, "last_updated": "..."}`                    | Yes           |
+| `/devices/{device_id}/telemetry` | POST   | Add device telemetry data             | Query params: `metric_name`, `metric_value`, `metric_units`                                             | `{"message": "Telemetry data added successfully", ...}`                                                    | Yes           |
 
 ### Data Analysis Routes
 
-| Route                 | Method | Description                | Request Body                                                                                               | Response                                                                                                   |
-| --------------------- | ------ | -------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `/query`              | POST   | Natural language SQL query | `{"query": "Show me detections by hour"}`                                                                  | `{"question": "...", "executed_sql": "...", "result": "...", "used_device_scope": true}`                   |
-| `/plots`              | GET    | Get 2D plot data           | Query params: `start_date`, `end_date`, `device`, `vehicle_type`, `created_by`                             | `[{"Data": {"X": [...], "Y": [...]}, "X-axis-label": "...", "Y-axis-label": "...", "Description": "..."}]` |
-| `/text-to-plots`      | POST   | Convert text to plot data  | `{"text_description": "Show me detections by hour", "start_date": "2024-01-01", "end_date": "2024-01-31"}` | `[{"Data": {"X": [...], "Y": [...]}, "Plot-type": "bar", ...}]`                                            |
-| `/vehicle-detections` | GET    | Get vehicle detection data | Query params: `start_date`, `end_date`                                                                     | `{"detections": [...], "total_count": 100}`                                                                |
+| Route                 | Method | Description                            | Request Body                                                                                                                                             | Response                                                                                                   | Auth Required |
+| --------------------- | ------ | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------- |
+| `/query`              | POST   | Natural language SQL query             | `{"query": "Show me detections by hour"}`                                                                                                                | `{"question": "...", "executed_sql": "...", "result": "...", "used_device_scope": true}`                   | Yes           |
+| `/plots`              | GET    | Get 2D plot data (auto-saved)          | Query params: `start_date`, `end_date`, `device`, `vehicle_type`                                                                                         | `[{"Data": {"X": [...], "Y": [...]}, "X-axis-label": "...", "Y-axis-label": "...", "Description": "..."}]` | Yes           |
+| `/text-to-plots`      | POST   | Convert text to plot data (auto-saved) | `{"text_description": "Show me detections by hour", "start_date": "2024-01-01", "end_date": "2024-01-31", "device": "Device-A1", "vehicle_type": "Car"}` | `[{"Data": {"X": [...], "Y": [...]}, "Plot-type": "bar", ...}]`                                            | Yes           |
+| `/vehicle-detections` | GET    | Get vehicle detection data             | Query params: `start_date` (required), `end_date` (required)                                                                                             | `{"detections": [...], "total_count": 100}`                                                                | Yes           |
+| `/schema`             | GET    | Get database schema                    | Query param: `summary_only` (optional)                                                                                                                   | `{"schema": {...}, "message": "Full schema retrieved successfully"}`                                       | Yes           |
+
+### Visualization Routes
+
+| Route             | Method | Description                   | Request Body                    | Response                                                                 | Auth Required |
+| ----------------- | ------ | ----------------------------- | ------------------------------- | ------------------------------------------------------------------------ | ------------- |
+| `/visualizations` | GET    | List all saved visualizations | Query params: `limit`, `offset` | `{"visualizations": [...], "total_count": 50, "limit": 10, "offset": 0}` | Yes           |
 
 ### Report Management Routes
 
-| Route                  | Method | Description                   | Request Body                                                                                       | Response                                                                                                 |
-| ---------------------- | ------ | ----------------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `/reports/generate`    | POST   | Generate comprehensive report | `{"start_date": "2024-01-01", "end_date": "2024-01-31", "title": "Report Title", "created_by": 1}` | `{"report_id": 1, "title": "...", "generated_at": "...", "executive_summary": {...}, "sections": [...]}` |
-| `/reports`             | GET    | Get all reports               | Query params: `limit`, `offset`                                                                    | `{"reports": [...], "total_count": 10}`                                                                  |
-| `/reports/{report_id}` | GET    | Get specific report details   | None                                                                                               | `{"report_id": 1, "title": "...", "sections": [...], "statistics": {...}}`                               |
-| `/reports/{report_id}` | DELETE | Delete a report               | None                                                                                               | `{"message": "Report deleted successfully"}`                                                             |
+| Route                  | Method | Description                   | Request Body                                                                                            | Response                                                                                                 | Auth Required |
+| ---------------------- | ------ | ----------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------- |
+| `/reports/generate`    | POST   | Generate comprehensive report | `{"start_date": "2024-01-01", "end_date": "2024-01-31", "title": "Report Title", "description": "..."}` | `{"report_id": 1, "title": "...", "generated_at": "...", "executive_summary": {...}, "sections": [...]}` | Yes           |
+| `/reports`             | GET    | Get all reports               | Query params: `limit`, `offset`                                                                         | `{"reports": [...], "total_count": 10}`                                                                  | Yes           |
+| `/reports/{report_id}` | GET    | Get specific report details   | None                                                                                                    | `{"report": {...}, "report_data": {...}, "visualizations": [...]}`                                       | Yes           |
+| `/reports/{report_id}` | DELETE | Delete a report               | None                                                                                                    | `{"message": "Report deleted successfully"}`                                                             | Yes           |
 
 ### Anomaly Detection Routes
 
-| Route                | Method | Description               | Request Body | Response                                                                                            |
-| -------------------- | ------ | ------------------------- | ------------ | --------------------------------------------------------------------------------------------------- |
-| `/anomalies/detect`  | POST   | Run anomaly detection     | None         | `{"message": "Anomaly detection completed", "anomalies_stored": 15, "detection_time": "..."}`       |
-| `/anomalies`         | GET    | Get all anomalies         | None         | `{"anomalies": [...], "active_count": 5, "total_count": 15, "detection_time": "..."}`               |
-| `/anomalies/summary` | GET    | Get anomaly summary       | None         | `{"active_anomalies": 5, "resolved_anomalies": 10, "total_anomalies": 15, "last_detection": "..."}` |
-| `/anomalies/active`  | GET    | Get only active anomalies | None         | `{"active_anomalies": [...], "active_count": 5, "detection_time": "..."}`                           |
+| Route                | Method | Description               | Request Body | Response                                                                                            | Auth Required |
+| -------------------- | ------ | ------------------------- | ------------ | --------------------------------------------------------------------------------------------------- | ------------- |
+| `/anomalies/detect`  | POST   | Run anomaly detection     | None         | `{"message": "Anomaly detection completed", "anomalies_stored": 15, "detection_time": "..."}`       | Yes           |
+| `/anomalies`         | GET    | Get all anomalies         | None         | `{"anomalies": [...], "active_count": 5, "total_count": 15, "detection_time": "..."}`               | Yes           |
+| `/anomalies/summary` | GET    | Get anomaly summary       | None         | `{"active_anomalies": 5, "resolved_anomalies": 10, "total_anomalies": 15, "last_detection": "..."}` | Yes           |
+| `/anomalies/active`  | GET    | Get only active anomalies | None         | `{"active_anomalies": [...], "active_count": 5, "detection_time": "..."}`                           | Yes           |
 
-### Schema Discovery Routes
+### Email Routes
 
-| Route     | Method | Description         | Request Body                           | Response                                                             |
-| --------- | ------ | ------------------- | -------------------------------------- | -------------------------------------------------------------------- |
-| `/schema` | GET    | Get database schema | Query param: `summary_only` (optional) | `{"schema": {...}, "message": "Full schema retrieved successfully"}` |
+| Route                | Method | Description                       | Request Body                                                                                                                                                 | Response                                                                                                   | Auth Required |
+| -------------------- | ------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | ------------- |
+| `/email/send`        | POST   | Send single email                 | `{"to_email": "user@example.com", "subject": "Subject", "body": "Message", "body_html": "<html>...</html>", "cc": [...], "bcc": [...]}`                      | `{"message": "Email sent successfully", "to": "...", "subject": "..."}`                                    | Yes           |
+| `/email/send-report` | POST   | Send report as email              | `{"to_email": "user@example.com", "report_id": 1}` OR `{"to_email": "...", "start_date": "2024-01-01", "end_date": "2024-01-31", "cc": [...], "bcc": [...]}` | `{"message": "Report email sent successfully", "to": "...", "report_id": 1, "report_title": "..."}`        | Yes           |
+| `/email/send-bulk`   | POST   | Send email to multiple recipients | `{"to_emails": ["user1@example.com", "user2@example.com"], "subject": "Subject", "body": "Message", "body_html": "<html>...</html>"}`                        | `{"message": "Bulk email sending completed", "success_count": 10, "failed_count": 0, "failed_emails": []}` | Yes           |
+
+**Note:** Email routes require `GMAIL_USER` and `GMAIL_APP_PASSWORD` in `.env` file.
 
 ### Data Models
 
@@ -219,3 +233,63 @@ python test_local_model.py
 - `storage_usage` - Storage utilization percentage
 - `network_latency` - Network latency in milliseconds
 - `temperature` - Device temperature in Celsius
+
+### Anomaly Detection Criteria
+
+The system detects 14 different types of anomalies:
+
+#### High Severity Anomalies
+
+- **Unrecognized Vehicle Type** - Vehicle type confidence score < 0.4
+- **Device Connectivity Issue** - Gaps in data collection, missing timestamps
+- **Sudden Traffic Volume Drop** - 50% lower than average
+- **Device Detection Rate Anomaly** - Detection rate 50% lower than other devices or historical average
+- **Missing Expected Detections** - Devices missing detections during active hours
+
+#### Medium Severity Anomalies
+
+- **Multiple Direction Changes** - 3+ direction changes within 5 minutes
+- **Low OCR Score** - OCR confidence score < 0.5
+- **Sudden Traffic Volume Spike** - 2x higher than average
+- **High Frequency Duplicate Detections** - Same license plate >5 times in 10 minutes
+- **Data Quality Issues** - Invalid data, NULL fields, out-of-range values
+- **General Active Alert** - Unusual patterns in vehicle detection data
+
+#### Low Severity Anomalies
+
+- **Duplicate License Plate Detection** - Same plate detected multiple times in 2 minutes
+- **Unusual Time Pattern Detection** - Off-peak spikes or missing peak activity
+- **Direction Imbalance Anomaly** - >80% traffic in one direction
+- **Vehicle Type Distribution Anomaly** - Distribution deviates from historical patterns
+- **Anomaly Resolved** - Previously detected anomaly has been resolved
+
+### Environment Variables
+
+Add these to your `.env` file:
+
+```env
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=FYP-DB
+DB_USER=FYP-USER
+DB_PASSWORD=FYP-PASS
+
+# JWT Configuration
+JWT_SECRET=your_jwt_secret_key_here
+JWT_EXPIRES_IN=3600
+PASSWORD_SALT=your_password_salt_here
+
+# AI Model Configuration
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:3b
+
+# JWT Authentication
+REQUIRE_JWT_AUTH=True  # Set to False for development (no auth required)
+
+# Gmail SMTP Configuration
+GMAIL_USER=your-email@gmail.com
+GMAIL_APP_PASSWORD=your-16-character-app-password
+```
+
+**Note:** For Gmail, you need to generate an App Password (not your regular password) at: https://myaccount.google.com/apppasswords
