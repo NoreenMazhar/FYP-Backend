@@ -1,9 +1,9 @@
 import os
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field, model_validator
 from db import Database
-from auth import hash_password, verify_password, create_jwt
+from auth import hash_password, verify_password, create_jwt, verify_jwt
 from dotenv import load_dotenv
 import logging
 import json
@@ -173,6 +173,119 @@ def get_db() -> Database:
 	return Database.get_instance()
 
 
+def get_current_user_id(authorization: Optional[str] = Header(None)) -> Optional[int]:
+	"""
+	Extract user ID from JWT token in Authorization header.
+	Returns None if token is not provided or invalid.
+	"""
+	if not authorization:
+		return None
+	
+	try:
+		# Extract token from "Bearer <token>" format
+		if authorization.startswith("Bearer "):
+			token = authorization[7:]
+		else:
+			token = authorization
+		
+		claims = verify_jwt(token)
+		if claims and "sub" in claims:
+			return int(claims["sub"])
+	except Exception as e:
+		logger.debug(f"Failed to extract user ID from token: {e}")
+	
+	return None
+
+
+def get_current_user(
+	authorization: Optional[str] = Header(None, alias="Authorization"),
+	db: Database = Depends(get_db)
+) -> dict:
+	"""
+	Authentication dependency that verifies JWT token and returns current user.
+	Checks if JWT authentication is required via REQUIRE_JWT_AUTH env variable.
+	Also verifies that the user is active.
+	
+	Returns:
+		dict: User information including id, email, display_name, user_type, is_active
+		
+	Raises:
+		HTTPException: 401 if authentication is required but token is missing/invalid
+		HTTPException: 403 if user account is inactive
+	"""
+	require_auth = os.getenv("REQUIRE_JWT_AUTH", "True").lower() in ("true", "1", "yes")
+	
+	# If authentication is not required, return None (no user)
+	if not require_auth:
+		return None
+	
+	# Authentication is required - check token
+	if not authorization:
+		raise HTTPException(
+			status_code=401,
+			detail="Authentication required. Please provide a valid JWT token in the Authorization header.",
+			headers={"WWW-Authenticate": "Bearer"},
+		)
+	
+	try:
+		# Extract token from "Bearer <token>" format
+		if authorization.startswith("Bearer "):
+			token = authorization[7:]
+		else:
+			token = authorization
+		
+		# Verify JWT token
+		claims = verify_jwt(token)
+		if not claims or "sub" not in claims:
+			raise HTTPException(
+				status_code=401,
+				detail="Invalid or expired token. Please login again.",
+				headers={"WWW-Authenticate": "Bearer"},
+			)
+		
+		user_id = int(claims["sub"])
+		
+		# Get user from database and verify they exist and are active
+		user = db.execute(
+			"SELECT id, email, display_name, user_type, is_active FROM users WHERE id=%s",
+			(user_id,)
+		)
+		
+		if not user:
+			raise HTTPException(
+				status_code=401,
+				detail="User not found. Please login again.",
+				headers={"WWW-Authenticate": "Bearer"},
+			)
+		
+		user = user[0]
+		
+		# Check if user is active
+		if not user.get("is_active", True):
+			raise HTTPException(
+				status_code=403,
+				detail="Account is inactive. Please contact administrator.",
+			)
+		
+		return {
+			"id": user["id"],
+			"email": user["email"],
+			"display_name": user["display_name"],
+			"user_type": user["user_type"],
+			"is_active": user["is_active"]
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as e:
+		logger.error(f"Authentication error: {e}")
+		raise HTTPException(
+			status_code=401,
+			detail="Authentication failed. Please provide a valid token.",
+			headers={"WWW-Authenticate": "Bearer"},
+		)
+
+
 def normalize_user_type(user_type: str) -> str:
 	"""
 	Normalize user_type to match the exact case expected by the database constraint.
@@ -315,10 +428,11 @@ def get_2d_plots(
 		device: Optional[str] = Query(None, description="Filter by device name"),
 		vehicle_type: Optional[str] = Query(None, description="Filter by vehicle type"),
 		db: Database = Depends(get_db),
-		created_by: Optional[int] = Query(None, description="If provided, save visualizations under this user id")
+		current_user: Optional[dict] = Depends(get_current_user)
 	):
 	"""
 	Return multiple 2D-ready datasets using the SQL Agent for query generation.
+	Visualizations are automatically saved to the database.
 	Returns a list of JSON objects with the following structure:
 	[
 		{
@@ -336,7 +450,32 @@ def get_2d_plots(
 	If start_date and end_date are not provided, queries the entire database.
 	"""
 	try:
-		return get_2d_plots_via_agent(start_date, end_date, device, vehicle_type, db, created_by)
+		# Get user ID from authenticated user or fallback
+		user_id = None
+		if current_user:
+			user_id = current_user["id"]
+			logger.info(f"Using authenticated user (ID: {user_id}) for visualization")
+		else:
+			# If authentication not required, try to get default user
+			try:
+				admin_user = db.execute("SELECT id FROM users WHERE user_type='admin' LIMIT 1")
+				if admin_user:
+					user_id = admin_user[0]["id"]
+					logger.info(f"Using default admin user (ID: {user_id}) for visualization")
+				else:
+					# If no admin exists, get first user
+					first_user = db.execute("SELECT id FROM users LIMIT 1")
+					if first_user:
+						user_id = first_user[0]["id"]
+						logger.info(f"Using first available user (ID: {user_id}) for visualization")
+			except Exception as e:
+				logger.warning(f"Failed to get default user for visualization: {e}")
+		
+		# Always save visualizations if we have a user ID
+		if user_id:
+			logger.info(f"Saving visualizations for user ID: {user_id}")
+		
+		return get_2d_plots_via_agent(start_date, end_date, device, vehicle_type, db, user_id)
 	except Exception as exc:
 		logger.exception("Failed to generate 2D plots via agent")
 		raise HTTPException(status_code=500, detail="Failed to generate 2D plots") from exc
@@ -345,10 +484,11 @@ def get_2d_plots(
 def convert_text_to_plots_route(
 		payload: TextToPlotRequest,
 		db: Database = Depends(get_db),
-		created_by: Optional[int] = Query(None, description="If provided, save visualizations under this user id")
+		current_user: Optional[dict] = Depends(get_current_user)
 	):
 	"""
 	Convert a text description to plot data using the SQL agent.
+	Visualizations are automatically saved to the database.
 	
 	This endpoint takes a natural language description of what kind of plot/analysis 
 	the user wants and generates appropriate plot data by using the SQL agent to 
@@ -384,9 +524,30 @@ def convert_text_to_plots_route(
 			vehicle_type=payload.vehicle_type
 		)
 		
-		# Optionally persist each plot as a visualization
-		if created_by is not None:
-			conn = Database.get_instance()
+		# Get user ID from authenticated user or fallback
+		user_id = None
+		if current_user:
+			user_id = current_user["id"]
+			logger.info(f"Using authenticated user (ID: {user_id}) for visualization")
+		else:
+			# If authentication not required, try to get default user
+			try:
+				admin_user = db.execute("SELECT id FROM users WHERE user_type='admin' LIMIT 1")
+				if admin_user:
+					user_id = admin_user[0]["id"]
+					logger.info(f"Using default admin user (ID: {user_id}) for visualization")
+				else:
+					# If no admin exists, get first user
+					first_user = db.execute("SELECT id FROM users LIMIT 1")
+					if first_user:
+						user_id = first_user[0]["id"]
+						logger.info(f"Using first available user (ID: {user_id}) for visualization")
+			except Exception as e:
+				logger.warning(f"Failed to get default user for visualization: {e}")
+		
+		# Always persist each plot as a visualization if we have a user ID
+		if user_id is not None:
+			logger.info(f"Saving {len(plots)} visualizations for user ID: {user_id}")
 			for plot in plots:
 				try:
 					viz_type = "chart"  # Default type
@@ -406,17 +567,20 @@ def convert_text_to_plots_route(
 						},
 						"text_description": payload.text_description
 					}
-					conn.execute(
+					db.execute(
 						"INSERT INTO visualizations (title, viz_type, config, created_by) VALUES (%s, %s, %s, %s)",
 						(
 							title,
 							viz_type,
 							json.dumps(config),
-							int(created_by),
+							int(user_id),
 						),
 					)
+					logger.debug(f"Saved visualization: {title}")
 				except Exception as e:
 					logger.warning(f"Failed to persist text-to-plot visualization: {e}")
+		else:
+			logger.warning("No user ID available, visualizations were not saved")
 		
 		return plots
 		
@@ -460,12 +624,17 @@ def register(payload: RegisterRequest, db: Database = Depends(get_db)):
 
 @app.post("/auth/login")
 def login(payload: LoginRequest, db: Database = Depends(get_db)):
-	user = db.execute("SELECT id, email, display_name, user_type, password_hash FROM users WHERE email=%s", (payload.email,))
+	user = db.execute("SELECT id, email, display_name, user_type, password_hash, is_active FROM users WHERE email=%s", (payload.email,))
 	if not user:
 		raise HTTPException(status_code=401, detail="Invalid credentials")
 	user = user[0]
 	if not verify_password(payload.password, user["password_hash"]):
 		raise HTTPException(status_code=401, detail="Invalid credentials")
+	
+	# Check if user is active
+	if not user.get("is_active", True):
+		raise HTTPException(status_code=403, detail="Account is inactive. Please contact administrator.")
+	
 	token = create_jwt({"sub": str(user["id"]), "email": user["email"]}, expires_in_seconds=int(os.getenv("JWT_EXPIRES_IN", "3600")))
 	return {"access_token": token, "token_type": "bearer", "user": {"id": user["id"], "email": user["email"], "display_name": user["display_name"], "user_type": user["user_type"]}}
 
@@ -585,7 +754,11 @@ def get_vehicle_detections(
 		raise HTTPException(status_code=500, detail="Failed to retrieve vehicle detections") from exc
 
 @app.post("/query")
-def query_route(payload: QueryRequest, db: Database = Depends(get_db)):
+def query_route(
+		payload: QueryRequest,
+		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user)
+	):
 	try:
 		result = run_data_raw_agent(payload.query)
 		
@@ -1436,7 +1609,7 @@ def add_device_telemetry(
 def generate_report(
 		payload: ReportRequest,
 		db: Database = Depends(get_db),
-		created_by: Optional[int] = Query(None, description="User ID creating the report")
+		current_user: Optional[dict] = Depends(get_current_user)
 	):
 	"""
 	Generate a comprehensive traffic monitoring report with visualizations and summary.
@@ -1444,6 +1617,9 @@ def generate_report(
 	"""
 	try:
 		logger.info(f"Generating report for period {payload.start_date} to {payload.end_date}")
+		
+		# Get user ID from authenticated user
+		created_by = current_user["id"] if current_user else None
 		
 		# Call the report generator module
 		report_data = generate_comprehensive_report(
@@ -1465,6 +1641,7 @@ def generate_report(
 @app.get("/reports")
 def get_reports(
 		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user),
 		limit: int = Query(10, description="Number of reports to return"),
 		offset: int = Query(0, description="Number of reports to skip")
 	):
@@ -1509,7 +1686,8 @@ def get_reports(
 @app.get("/reports/{report_id}")
 def get_report_details(
 		report_id: int,
-		db: Database = Depends(get_db)
+		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user)
 	):
 	"""
 	Get detailed information for a specific report including all sections and visualizations.
@@ -1576,7 +1754,8 @@ def get_report_details(
 @app.delete("/reports/{report_id}")
 def delete_report(
 		report_id: int,
-		db: Database = Depends(get_db)
+		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user)
 	):
 	"""
 	Delete a report and its associated visualizations.
@@ -1614,9 +1793,10 @@ def delete_report(
 @app.get("/visualizations")
 def list_visualizations(
 		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user),
 		limit: int = Query(10, description="Number of visualizations to return"),
 		offset: int = Query(0, description="Number of visualizations to skip")
-):
+	):
 	"""
 	Get a list of visualizations with basic information.
 	"""

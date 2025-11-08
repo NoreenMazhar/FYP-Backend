@@ -435,19 +435,23 @@ def get_2d_plots_via_agent(
 	# Generate plots via agent
 	plots = generate_2d_plots(start_date, end_date, device, vehicle_type)
 
-	# Optionally persist each plot as a visualization
+	# Always persist each plot as a visualization if user ID is provided
 	if created_by is not None:
+		logger.info(f"Auto-saving {len(plots)} visualizations for user ID: {created_by}")
 		conn = Database.get_instance()
 		for plot in plots:
 			try:
 				viz_type = "chart"  # Default type
-				title = "Visualization"
+				title = plot.get("Description", "Visualization")[:255]  # Use description as title, limit length
+				if not title or title == "Visualization":
+					title = f"Plot: {plot.get('X-axis-label', 'X')} vs {plot.get('Y-axis-label', 'Y')}"
 				config = {
 					"x": plot.get("Data", {}).get("X", []),
 					"y": plot.get("Data", {}).get("Y", []),
 					"description": plot.get("Description", ""),
 					"x_axis_label": plot.get("X-axis-label", ""),
 					"y_axis_label": plot.get("Y-axis-label", ""),
+					"plot_type": plot.get("Plot-type", "bar"),
 					"filters": {
 						"start_date": start_date.isoformat() if start_date else None,
 						"end_date": end_date.isoformat() if end_date else None,
@@ -464,6 +468,7 @@ def get_2d_plots_via_agent(
 						int(created_by),
 					),
 				)
+				logger.debug(f"Saved visualization: {title}")
 			except Exception as e:
 				logger.warning(f"Failed to persist visualization: {e}")
 

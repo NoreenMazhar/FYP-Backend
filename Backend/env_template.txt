@@ -21,5 +21,10 @@ JWT_EXPIRES_IN=3600
 # Application Configuration
 DEBUG=False
 
+# JWT Authentication
+# Set to True to require JWT token authentication for protected routes
+# Set to False to allow access without authentication (development mode)
+REQUIRE_JWT_AUTH=True
+
 GMAIL_USER=your-email@gmail.com
 GMAIL_APP_PASSWORD=your-16-character-app-password
