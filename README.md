@@ -191,12 +191,13 @@ python test_local_model.py
 
 ### Anomaly Detection Routes
 
-| Route                | Method | Description               | Request Body | Response                                                                                            | Auth Required |
-| -------------------- | ------ | ------------------------- | ------------ | --------------------------------------------------------------------------------------------------- | ------------- |
-| `/anomalies/detect`  | POST   | Run anomaly detection     | None         | `{"message": "Anomaly detection completed", "anomalies_stored": 15, "detection_time": "..."}`       | Yes           |
-| `/anomalies`         | GET    | Get all anomalies         | None         | `{"anomalies": [...], "active_count": 5, "total_count": 15, "detection_time": "..."}`               | Yes           |
-| `/anomalies/summary` | GET    | Get anomaly summary       | None         | `{"active_anomalies": 5, "resolved_anomalies": 10, "total_anomalies": 15, "last_detection": "..."}` | Yes           |
-| `/anomalies/active`  | GET    | Get only active anomalies | None         | `{"active_anomalies": [...], "active_count": 5, "detection_time": "..."}`                           | Yes           |
+| Route                        | Method | Description                    | Request Body                    | Response                                                                                            | Auth Required |
+| ---------------------------- | ------ | ------------------------------ | ------------------------------- | --------------------------------------------------------------------------------------------------- | ------------- |
+| `/anomalies/detect`          | POST   | Run anomaly detection          | None                            | `{"message": "Anomaly detection completed", "anomalies_stored": 15, "detection_time": "..."}`       | Yes           |
+| `/anomalies`                 | GET    | Get all anomalies              | None                            | `{"anomalies": [...], "active_count": 5, "total_count": 15, "detection_time": "..."}`               | Yes           |
+| `/anomalies/summary`         | GET    | Get anomaly summary            | None                            | `{"active_anomalies": 5, "resolved_anomalies": 10, "total_anomalies": 15, "last_detection": "..."}` | Yes           |
+| `/anomalies/active`          | GET    | Get only active anomalies      | None                            | `{"active_anomalies": [...], "active_count": 5, "detection_time": "..."}`                           | Yes           |
+| `/anomalies/{anomaly_id}/status` | PUT | Update anomaly status (active/resolved) | `{"status": "resolved"}` OR `{"status": "active"}` | `{"message": "Anomaly status updated successfully", "anomaly": {...}}` | Yes           |
 
 ### Email Routes
 

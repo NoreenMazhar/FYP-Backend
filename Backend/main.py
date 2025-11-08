@@ -92,6 +92,9 @@ class UpdateUserTypeRequest(BaseModel):
 	email: EmailStr
 	user_type: str = Field(pattern="^(admin|Analyst|View|Security)$")
 
+class UpdateAnomalyStatusRequest(BaseModel):
+	status: str = Field(pattern="^(active|resolved)$")
+
 class DeviceResponse(BaseModel):
 	id: int
 	device_uid: str
@@ -1032,6 +1035,114 @@ async def run_anomaly_detection(db: Database = Depends(get_db)):
 	except Exception as exc:
 		logger.exception("Failed to run anomaly detection")
 		raise HTTPException(status_code=500, detail="Failed to run anomaly detection") from exc
+
+
+@app.put("/anomalies/{anomaly_id}/status")
+def update_anomaly_status(
+		anomaly_id: int,
+		payload: UpdateAnomalyStatusRequest,
+		db: Database = Depends(get_db),
+		current_user: Optional[dict] = Depends(get_current_user)
+	):
+	"""
+	Update anomaly status from active to resolved or vice versa.
+	When marking as resolved, sets resolved_at timestamp.
+	When reactivating, clears resolved_at timestamp.
+	"""
+	try:
+		logger.info(f"Updating status for anomaly {anomaly_id} to {payload.status}")
+		
+		# Check if anomaly exists
+		anomaly = db.execute(
+			"""
+			SELECT id, anomaly_type, description, status, severity, device_id, icon, 
+			       details, detected_at, resolved_at, created_at, updated_at
+			FROM anomalies 
+			WHERE id=%s
+			""",
+			(anomaly_id,)
+		)
+		
+		if not anomaly:
+			raise HTTPException(status_code=404, detail=f"Anomaly with ID {anomaly_id} not found")
+		
+		anomaly = anomaly[0]
+		
+		# If status is the same, no update needed
+		if anomaly['status'] == payload.status:
+			logger.info(f"Anomaly {anomaly_id} already has status {payload.status}")
+			return {
+				"message": f"Anomaly status is already {payload.status}",
+				"anomaly": {
+					"id": anomaly['id'],
+					"anomaly_type": anomaly['anomaly_type'],
+					"description": anomaly['description'],
+					"status": anomaly['status'],
+					"severity": anomaly['severity'],
+					"device_id": anomaly['device_id'],
+					"icon": anomaly['icon'],
+					"detected_at": anomaly['detected_at'].isoformat() if anomaly['detected_at'] else None,
+					"resolved_at": anomaly['resolved_at'].isoformat() if anomaly['resolved_at'] else None,
+					"updated_at": anomaly['updated_at'].isoformat() if anomaly['updated_at'] else None
+				}
+			}
+		
+		# Update status and resolved_at timestamp
+		if payload.status == 'resolved':
+			# Marking as resolved - set resolved_at to current timestamp
+			db.execute(
+				"""
+				UPDATE anomalies 
+				SET status=%s, resolved_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP 
+				WHERE id=%s
+				""",
+				(payload.status, anomaly_id)
+			)
+			logger.info(f"Anomaly {anomaly_id} marked as resolved")
+		else:
+			# Reactivating - clear resolved_at
+			db.execute(
+				"""
+				UPDATE anomalies 
+				SET status=%s, resolved_at=NULL, updated_at=CURRENT_TIMESTAMP 
+				WHERE id=%s
+				""",
+				(payload.status, anomaly_id)
+			)
+			logger.info(f"Anomaly {anomaly_id} reactivated")
+		
+		# Fetch updated anomaly
+		updated_anomaly = db.execute(
+			"""
+			SELECT id, anomaly_type, description, status, severity, device_id, icon, 
+			       details, detected_at, resolved_at, created_at, updated_at
+			FROM anomalies 
+			WHERE id=%s
+			""",
+			(anomaly_id,)
+		)[0]
+		
+		return {
+			"message": f"Anomaly status updated successfully to {payload.status}",
+			"anomaly": {
+				"id": updated_anomaly['id'],
+				"anomaly_type": updated_anomaly['anomaly_type'],
+				"description": updated_anomaly['description'],
+				"status": updated_anomaly['status'],
+				"severity": updated_anomaly['severity'],
+				"device_id": updated_anomaly['device_id'],
+				"icon": updated_anomaly['icon'],
+				"detected_at": updated_anomaly['detected_at'].isoformat() if updated_anomaly['detected_at'] else None,
+				"resolved_at": updated_anomaly['resolved_at'].isoformat() if updated_anomaly['resolved_at'] else None,
+				"updated_at": updated_anomaly['updated_at'].isoformat() if updated_anomaly['updated_at'] else None
+			}
+		}
+		
+	except HTTPException:
+		raise
+	except Exception as exc:
+		logger.exception(f"Failed to update anomaly status for {anomaly_id}")
+		raise HTTPException(status_code=500, detail="Failed to update anomaly status") from exc
 
 
 @app.put("/users/status")
