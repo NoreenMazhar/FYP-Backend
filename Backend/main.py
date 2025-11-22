@@ -1,5 +1,6 @@
 import os
 from fastapi import FastAPI, HTTPException, Depends, Query, Header
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr, Field, model_validator
 from db import Database
@@ -29,6 +30,15 @@ logger.info("Starting FYP Backend")
 load_dotenv()
 
 app = FastAPI(title="FYP Backend")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class RegisterRequest(BaseModel):
@@ -561,39 +571,108 @@ def convert_text_to_plots_route(
 				logger.warning(f"Failed to get default user for visualization: {e}")
 		
 		# Always persist each plot as a visualization if we have a user ID
+		# Only save successful plots (not error plots or empty plots)
 		if user_id is not None:
-			logger.info(f"Saving {len(plots)} visualizations for user ID: {user_id}")
+			successful_plots = []
 			for plot in plots:
-				try:
-					viz_type = "chart"  # Default type
-					title = f"Text-to-Plot: {payload.text_description[:50]}..."
-					config = {
-						"x": plot.get("Data", {}).get("X", []),
-						"y": plot.get("Data", {}).get("Y", []),
-						"description": plot.get("Description", ""),
-						"x_axis_label": plot.get("X-axis-label", ""),
-						"y_axis_label": plot.get("Y-axis-label", ""),
-						"plot_type": plot.get("Plot-type", "bar"),
-						"filters": {
-							"start_date": payload.start_date.isoformat() if payload.start_date else None,
-							"end_date": payload.end_date.isoformat() if payload.end_date else None,
-							"device": payload.device,
-							"vehicle_type": payload.vehicle_type,
-						},
-						"text_description": payload.text_description
-					}
-					db.execute(
-						"INSERT INTO visualizations (title, viz_type, config, created_by) VALUES (%s, %s, %s, %s)",
-						(
-							title,
-							viz_type,
-							json.dumps(config),
-							int(user_id),
-						),
-					)
-					logger.debug(f"Saved visualization: {title}")
-				except Exception as e:
-					logger.warning(f"Failed to persist text-to-plot visualization: {e}")
+				# Check if plot is valid (has data and is not an error plot)
+				plot_data = plot.get("Data", {})
+				x_vals = plot_data.get("X", [])
+				y_vals = plot_data.get("Y", [])
+				description = plot.get("Description", "").strip().lower()
+				
+				# Skip error plots, empty plots, or plots with only error markers
+				if not x_vals or not y_vals:
+					logger.warning(f"Skipping plot with no data: {plot.get('Description', 'Unknown')}")
+					continue
+				
+				# Check if it's an error or "no data" plot
+				if any(marker in description for marker in ["error", "failed", "no data found"]):
+					logger.warning(f"Skipping error/no-data plot: {description}")
+					continue
+				
+				# Check if X values are all error markers
+				if all(x in ["Error", "No Data", "Unknown"] for x in x_vals):
+					logger.warning(f"Skipping plot with only error markers: {description}")
+					continue
+				
+				# Check if Y values are all zero (might indicate no real data)
+				if all(y == 0 or y == 0.0 for y in y_vals):
+					logger.warning(f"Skipping plot with all zero values: {description}")
+					continue
+				
+				successful_plots.append(plot)
+			
+			if successful_plots:
+				logger.info(f"Saving {len(successful_plots)} successful visualizations for user ID: {user_id}")
+				for plot in successful_plots:
+					try:
+						# Use the actual plot type from the plot data (bar, line, pie, donut)
+						plot_type = plot.get("Plot-type", "bar").lower()
+						viz_type = plot_type if plot_type in ["bar", "line", "pie", "donut", "heatmap"] else "bar"
+						
+						# Generate a descriptive title
+						description = plot.get("Description", "").strip()
+						x_label = plot.get("X-axis-label", "").strip()
+						y_label = plot.get("Y-axis-label", "").strip()
+						
+						# Build title: prefer description, then combine axis labels with chart type
+						if description and len(description) > 10:
+							# Use description if it's meaningful
+							title = description
+							# Add chart type if not already mentioned
+							chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+							if chart_type_name.lower() not in title.lower():
+								title = f"{description} ({chart_type_name})"
+						elif x_label and y_label:
+							# Build from axis labels
+							chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+							title = f"{y_label} by {x_label} - {chart_type_name}"
+						elif description:
+							# Use description even if short
+							chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+							title = f"{description} ({chart_type_name})"
+						else:
+							# Fallback: use text description or generic title
+							if payload.text_description:
+								chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+								title = f"{payload.text_description[:100]} - {chart_type_name}"
+							else:
+								chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+								title = f"Vehicle Detection Data - {chart_type_name}"
+						
+						# Ensure title doesn't exceed 255 characters
+						title = title[:255]
+						
+						config = {
+							"x": plot.get("Data", {}).get("X", []),
+							"y": plot.get("Data", {}).get("Y", []),
+							"description": plot.get("Description", ""),
+							"x_axis_label": plot.get("X-axis-label", ""),
+							"y_axis_label": plot.get("Y-axis-label", ""),
+							"plot_type": plot.get("Plot-type", "bar"),
+							"filters": {
+								"start_date": payload.start_date.isoformat() if payload.start_date else None,
+								"end_date": payload.end_date.isoformat() if payload.end_date else None,
+								"device": payload.device,
+								"vehicle_type": payload.vehicle_type,
+							},
+							"text_description": payload.text_description
+						}
+						db.execute(
+							"INSERT INTO visualizations (title, viz_type, config, created_by) VALUES (%s, %s, %s, %s)",
+							(
+								title,
+								viz_type,
+								json.dumps(config),
+								int(user_id),
+							),
+						)
+						logger.debug(f"Saved visualization: {title}")
+					except Exception as e:
+						logger.warning(f"Failed to persist text-to-plot visualization: {e}")
+			else:
+				logger.warning(f"No successful plots to save for user ID: {user_id} (all plots failed or had no data)")
 		else:
 			logger.warning("No user ID available, visualizations were not saved")
 		

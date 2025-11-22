@@ -2,10 +2,25 @@ import logging
 import json
 from datetime import datetime, date
 from typing import Dict, List, Any, Optional
+from decimal import Decimal
 from db import Database
 from plots import get_2d_plots_via_agent
 
 logger = logging.getLogger(__name__)
+
+
+def _convert_decimals_to_float(obj):
+    """Recursively convert Decimal objects to float for JSON serialization."""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {key: _convert_decimals_to_float(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [_convert_decimals_to_float(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(_convert_decimals_to_float(item) for item in obj)
+    else:
+        return obj
 
 
 def generate_comprehensive_report(
@@ -60,6 +75,9 @@ def generate_comprehensive_report(
         stats = db.execute(stats_query, (start_date, end_date))
         stats = stats[0] if stats else {}
         
+        # Convert Decimal values to float for JSON serialization
+        stats = _convert_decimals_to_float(stats)
+        
         # Generate executive summary
         summary = _generate_executive_summary(stats, anomalies, start_date, end_date)
         
@@ -107,6 +125,9 @@ def generate_comprehensive_report(
                 "resolved_anomalies": len([a for a in anomalies if a['status'] == 'resolved'])
             }
         }
+        
+        # Convert any remaining Decimal values to float for JSON serialization
+        report_data = _convert_decimals_to_float(report_data)
         
         logger.info(f"Successfully generated report {report_id}")
         return report_data
@@ -368,6 +389,9 @@ def _save_report_to_db(db, title, description, created_by, start_date, end_date,
             "sections": sections,
             "generated_at": datetime.now().isoformat()
         }
+        
+        # Convert any Decimal values to float for JSON serialization
+        report_metadata = _convert_decimals_to_float(report_metadata)
         
         # Create a visualization entry for the report
         db.execute("""

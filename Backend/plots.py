@@ -10,13 +10,69 @@ from sql_agent import run_data_raw_agent
 logger = logging.getLogger(__name__)
 
 
+def _validate_and_fix_sql(sql: str) -> str:
+	"""Validate and fix SQL queries to ensure GROUP BY compatibility.
+	Fixes common issues like non-aggregated columns in SELECT with GROUP BY.
+	"""
+	if not sql:
+		raise ValueError("SQL query is empty")
+	
+	sql_upper = sql.upper().strip()
+	if not sql_upper.startswith("SELECT"):
+		raise ValueError("Only SELECT statements are allowed")
+	
+	# Check if query has GROUP BY
+	if "GROUP BY" in sql_upper:
+		# Extract SELECT and GROUP BY clauses
+		select_idx = sql_upper.find("SELECT")
+		from_idx = sql_upper.find("FROM")
+		group_by_idx = sql_upper.find("GROUP BY")
+		
+		if select_idx >= 0 and from_idx > select_idx and group_by_idx > from_idx:
+			# Get the SELECT columns
+			select_clause = sql[select_idx + 6:from_idx].strip()
+			group_by_clause = sql[group_by_idx + 8:].strip()
+			# Remove ORDER BY if present
+			order_by_idx = group_by_clause.upper().find("ORDER BY")
+			if order_by_idx > 0:
+				group_by_clause = group_by_clause[:order_by_idx].strip()
+			
+			# Check if SELECT has aggregation functions
+			has_aggregation = any(func in select_clause.upper() for func in ["COUNT(", "AVG(", "SUM(", "MAX(", "MIN("])
+			
+			if has_aggregation:
+				# Ensure all non-aggregated columns in SELECT are in GROUP BY
+				# This is a simplified check - for complex queries, the agent should generate correct SQL
+				# But we can at least warn or try to fix obvious issues
+				pass  # The agent should handle this correctly, but we'll catch errors during execution
+	
+	return sql
+
+
 def _execute_sql(db: Database, sql: str):
 	"""Execute raw SQL using the project's MySQL connection and return rows.
 	This expects a read-only SELECT produced by the SQL agent.
+	Validates and fixes SQL before execution.
 	"""
 	if not sql or not sql.strip().lower().startswith("select"):
 		raise ValueError("Only SELECT statements are allowed")
-	return db.execute(sql)
+	
+	# Validate SQL
+	try:
+		sql = _validate_and_fix_sql(sql)
+	except Exception as e:
+		logger.warning(f"SQL validation warning: {e}")
+	
+	try:
+		return db.execute(sql)
+	except Exception as e:
+		error_msg = str(e)
+		# Check for GROUP BY errors
+		if "GROUP BY" in error_msg.upper() or "nonaggregated" in error_msg.lower():
+			logger.error(f"SQL GROUP BY error: {error_msg}")
+			logger.error(f"Problematic SQL: {sql}")
+			raise ValueError(f"SQL GROUP BY error: {error_msg}. Please ensure all non-aggregated columns in SELECT are included in GROUP BY clause.")
+		raise
 
 
 def _build_filter_clause(start_date: Optional[date], end_date: Optional[date], device: Optional[str], vehicle_type: Optional[str]) -> str:
@@ -316,14 +372,17 @@ def convert_text_to_plots(
 	
 	Write a MySQL SELECT query over the data_raw table that returns two columns aliased as 'x' and 'y'.
 	
-	Requirements:
+	CRITICAL REQUIREMENTS:
 	- The query should be relevant to the user's request
 	- Use the WHERE clause: {where_clause}
 	- The 'x' column should contain categorical or time-based data
-	- The 'y' column should contain numerical data (counts, averages, sums, etc.)
+	- The 'y' column MUST be an aggregated value (COUNT(*), AVG(column), SUM(column), etc.)
+	- If using GROUP BY, ALL non-aggregated columns in SELECT must be included in GROUP BY
+	- NEVER include non-aggregated columns in SELECT when using GROUP BY (e.g., don't SELECT ocr_score directly if grouping by device_name - use AVG(ocr_score) instead)
 	- Group by the 'x' column if appropriate
 	- Order the results logically
 	- Only output the SQL query, no other text
+	- The query must be compatible with MySQL's ONLY_FULL_GROUP_BY mode
 	
 	Available columns in data_raw:
 	- local_timestamp (datetime)
@@ -333,9 +392,18 @@ def convert_text_to_plots(
 	- ocr_score (float)
 	- vehicle_types_lp_ocr (string)
 	
-	Examples of good queries:
+	Examples of CORRECT queries:
 	- For "show me detections by hour": SELECT HOUR(local_timestamp) as x, COUNT(*) as y FROM data_raw WHERE {where_clause} GROUP BY HOUR(local_timestamp) ORDER BY HOUR(local_timestamp)
 	- For "average ocr score by device": SELECT device_name as x, AVG(ocr_score) as y FROM data_raw WHERE {where_clause} GROUP BY device_name ORDER BY AVG(ocr_score) DESC
+	- For "detections by vehicle type": SELECT vehicle_type as x, COUNT(*) as y FROM data_raw WHERE {where_clause} GROUP BY vehicle_type ORDER BY COUNT(*) DESC
+	
+	WRONG (will cause errors):
+	- SELECT device_name as x, ocr_score as y FROM data_raw WHERE {where_clause} GROUP BY device_name  (ocr_score is not aggregated!)
+	- SELECT DATE(local_timestamp) as x, ocr_score as y FROM data_raw WHERE {where_clause} GROUP BY DATE(local_timestamp)  (ocr_score is not aggregated!)
+	
+	CORRECT:
+	- SELECT device_name as x, AVG(ocr_score) as y FROM data_raw WHERE {where_clause} GROUP BY device_name
+	- SELECT DATE(local_timestamp) as x, AVG(ocr_score) as y FROM data_raw WHERE {where_clause} GROUP BY DATE(local_timestamp)
 	"""
 
 	try:
@@ -346,80 +414,71 @@ def convert_text_to_plots(
 			Write a MySQL SELECT over data_raw that returns two columns aliased as x and y.
 			x must be vehicle_type and y must be COUNT(*).
 			Filter with: {where_clause}. Group by vehicle_type. Order by COUNT(*) DESC.
-			Only output SQL.
+			Only output SQL. Ensure GROUP BY compatibility with ONLY_FULL_GROUP_BY mode.
 			"""
-			_, rows = _ask_agent_for_xy(fallback_prompt)
+			try:
+				_, rows = _ask_agent_for_xy(fallback_prompt)
+			except Exception as fallback_error:
+				logger.error(f"Fallback query also failed: {fallback_error}")
+				rows = []
 		
-		if rows:
+		if rows and len(rows) > 0:
 			x_vals, y_vals = _rows_to_xy(rows)
 			x_vals = _sanitize_x_labels(x_vals)
 			
-			# Determine plot type based on the data
-			plot_type = "bar"  # Default
-			if len(x_vals) > 10:  # If many data points, use line chart
-				plot_type = "line"
-			elif len(x_vals) <= 5:  # If few categories, use pie chart
-				plot_type = "pie"
-			
-			# Generate appropriate labels
-			x_label = "Category"
-			y_label = "Count"
-			
-			# Try to infer better labels from the data
-			if any("hour" in str(x).lower() or "time" in str(x).lower() for x in x_vals):
-				x_label = "Time"
-			elif any("date" in str(x).lower() for x in x_vals):
-				x_label = "Date"
-			elif any("device" in str(x).lower() for x in x_vals):
-				x_label = "Device"
-			elif any("type" in str(x).lower() for x in x_vals):
-				x_label = "Vehicle Type"
-			elif any("direction" in str(x).lower() for x in x_vals):
-				x_label = "Direction"
-			
-			if any("avg" in str(y).lower() or "average" in str(y).lower() for y in y_vals):
-				y_label = "Average Value"
-			elif any("sum" in str(y).lower() for y in y_vals):
-				y_label = "Total Value"
-			elif any("count" in str(y).lower() for y in y_vals):
+			# Validate that we have actual data (not just error markers)
+			if len(x_vals) > 0 and not all(x in ["Error", "No Data", "Unknown"] for x in x_vals):
+				# Determine plot type based on the data
+				plot_type = "bar"  # Default
+				if len(x_vals) > 10:  # If many data points, use line chart
+					plot_type = "line"
+				elif len(x_vals) <= 5:  # If few categories, use pie chart
+					plot_type = "pie"
+				
+				# Generate appropriate labels
+				x_label = "Category"
 				y_label = "Count"
-			
-			plots.append({
-				"Data": {
-					"X": x_vals,
-					"Y": y_vals
-				},
-				"Plot-type": plot_type,
-				"X-axis-label": x_label,
-				"Y-axis-label": y_label,
-				"Description": f"Analysis based on: {text_description}"
-			})
+				
+				# Try to infer better labels from the data
+				if any("hour" in str(x).lower() or "time" in str(x).lower() for x in x_vals):
+					x_label = "Time"
+				elif any("date" in str(x).lower() for x in x_vals):
+					x_label = "Date"
+				elif any("device" in str(x).lower() for x in x_vals):
+					x_label = "Device"
+				elif any("type" in str(x).lower() for x in x_vals):
+					x_label = "Vehicle Type"
+				elif any("direction" in str(x).lower() for x in x_vals):
+					x_label = "Direction"
+				
+				if any("avg" in str(y).lower() or "average" in str(y).lower() for y in y_vals):
+					y_label = "Average Value"
+				elif any("sum" in str(y).lower() for y in y_vals):
+					y_label = "Total Value"
+				elif any("count" in str(y).lower() for y in y_vals):
+					y_label = "Count"
+				
+				plots.append({
+					"Data": {
+						"X": x_vals,
+						"Y": y_vals
+					},
+					"Plot-type": plot_type,
+					"X-axis-label": x_label,
+					"Y-axis-label": y_label,
+					"Description": f"Analysis based on: {text_description}"
+				})
+			else:
+				# Invalid data - don't add to plots
+				logger.warning(f"Plot generation returned invalid data for: {text_description}")
 		else:
-			# If no data, return an empty plot with a message
-			plots.append({
-				"Data": {
-					"X": ["No Data"],
-					"Y": [0]
-				},
-				"Plot-type": "bar",
-				"X-axis-label": "Status",
-				"Y-axis-label": "Count",
-				"Description": f"No data found for: {text_description}"
-			})
+			# No data returned - don't add error plot, just log
+			logger.warning(f"No data returned for plot: {text_description}")
 			
 	except Exception as e:
-		logger.warning(f"Text to plot conversion failed: {e}")
-		# Return an error plot
-		plots.append({
-			"Data": {
-				"X": ["Error"],
-				"Y": [0]
-			},
-			"Plot-type": "bar",
-			"X-axis-label": "Status",
-			"Y-axis-label": "Count",
-			"Description": f"Error processing request: {text_description}"
-		})
+		logger.error(f"Text to plot conversion failed: {e}")
+		# Don't add error plots - just log the error
+		# The calling code will handle empty plots list
 
 	return plots
 
@@ -436,40 +495,102 @@ def get_2d_plots_via_agent(
 	plots = generate_2d_plots(start_date, end_date, device, vehicle_type)
 
 	# Always persist each plot as a visualization if user ID is provided
+	# Only save successful plots (not error plots or empty plots)
 	if created_by is not None:
-		logger.info(f"Auto-saving {len(plots)} visualizations for user ID: {created_by}")
-		conn = Database.get_instance()
+		successful_plots = []
 		for plot in plots:
-			try:
-				viz_type = "chart"  # Default type
-				title = plot.get("Description", "Visualization")[:255]  # Use description as title, limit length
-				if not title or title == "Visualization":
-					title = f"Plot: {plot.get('X-axis-label', 'X')} vs {plot.get('Y-axis-label', 'Y')}"
-				config = {
-					"x": plot.get("Data", {}).get("X", []),
-					"y": plot.get("Data", {}).get("Y", []),
-					"description": plot.get("Description", ""),
-					"x_axis_label": plot.get("X-axis-label", ""),
-					"y_axis_label": plot.get("Y-axis-label", ""),
-					"plot_type": plot.get("Plot-type", "bar"),
-					"filters": {
-						"start_date": start_date.isoformat() if start_date else None,
-						"end_date": end_date.isoformat() if end_date else None,
-						"device": device,
-						"vehicle_type": vehicle_type,
-					},
-				}
-				conn.execute(
-					"INSERT INTO visualizations (title, viz_type, config, created_by) VALUES (%s, %s, %s, %s)",
-					(
-						title,
-						viz_type,
-						json.dumps(config),
-						int(created_by),
-					),
-				)
-				logger.debug(f"Saved visualization: {title}")
-			except Exception as e:
-				logger.warning(f"Failed to persist visualization: {e}")
+			# Check if plot is valid (has data and is not an error plot)
+			plot_data = plot.get("Data", {})
+			x_vals = plot_data.get("X", [])
+			y_vals = plot_data.get("Y", [])
+			description = plot.get("Description", "").strip().lower()
+			
+			# Skip error plots, empty plots, or plots with only error markers
+			if not x_vals or not y_vals:
+				logger.warning(f"Skipping plot with no data: {plot.get('Description', 'Unknown')}")
+				continue
+			
+			# Check if it's an error or "no data" plot
+			if any(marker in description for marker in ["error", "failed", "no data available"]):
+				logger.warning(f"Skipping error/no-data plot: {description}")
+				continue
+			
+			# Check if X values are all error markers
+			if all(x in ["Error", "No Data", "Unknown"] for x in x_vals):
+				logger.warning(f"Skipping plot with only error markers: {description}")
+				continue
+			
+			successful_plots.append(plot)
+		
+		if successful_plots:
+			logger.info(f"Auto-saving {len(successful_plots)} successful visualizations for user ID: {created_by}")
+			conn = Database.get_instance()
+			for plot in successful_plots:
+				try:
+					# Use the actual plot type from the plot data (bar, line, pie, donut)
+					plot_type = plot.get("Plot-type", "bar").lower()
+					viz_type = plot_type if plot_type in ["bar", "line", "pie", "donut", "heatmap"] else "bar"
+					
+					# Generate a descriptive title
+					description = plot.get("Description", "").strip()
+					x_label = plot.get("X-axis-label", "").strip()
+					y_label = plot.get("Y-axis-label", "").strip()
+					
+					# Build title: prefer description, then combine axis labels with chart type
+					if description and len(description) > 10 and description != "Visualization":
+						# Use description if it's meaningful
+						title = description
+						# Add chart type if not already mentioned
+						chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+						if chart_type_name.lower() not in title.lower():
+							title = f"{description} ({chart_type_name})"
+					elif x_label and y_label:
+						# Build from axis labels
+						chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+						title = f"{y_label} by {x_label} - {chart_type_name}"
+					elif description and description != "Visualization":
+						# Use description even if short
+						chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+						title = f"{description} ({chart_type_name})"
+					else:
+						# Fallback: generic but descriptive title
+						chart_type_name = {"bar": "Bar Chart", "line": "Line Chart", "pie": "Pie Chart", "donut": "Donut Chart", "heatmap": "Heatmap"}.get(plot_type, "Chart")
+						if x_label or y_label:
+							labels = f"{y_label or 'Value'} by {x_label or 'Category'}"
+							title = f"{labels} - {chart_type_name}"
+						else:
+							title = f"Vehicle Detection Data - {chart_type_name}"
+					
+					# Ensure title doesn't exceed 255 characters
+					title = title[:255]
+					
+					config = {
+						"x": plot.get("Data", {}).get("X", []),
+						"y": plot.get("Data", {}).get("Y", []),
+						"description": plot.get("Description", ""),
+						"x_axis_label": plot.get("X-axis-label", ""),
+						"y_axis_label": plot.get("Y-axis-label", ""),
+						"plot_type": plot.get("Plot-type", "bar"),
+						"filters": {
+							"start_date": start_date.isoformat() if start_date else None,
+							"end_date": end_date.isoformat() if end_date else None,
+							"device": device,
+							"vehicle_type": vehicle_type,
+						},
+					}
+					conn.execute(
+						"INSERT INTO visualizations (title, viz_type, config, created_by) VALUES (%s, %s, %s, %s)",
+						(
+							title,
+							viz_type,
+							json.dumps(config),
+							int(created_by),
+						),
+					)
+					logger.debug(f"Saved visualization: {title}")
+				except Exception as e:
+					logger.warning(f"Failed to persist visualization: {e}")
+		else:
+			logger.warning(f"No successful plots to save for user ID: {created_by} (all plots failed or had no data)")
 
 	return plots

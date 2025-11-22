@@ -4,8 +4,8 @@
 
 INSERT INTO users (id, email, display_name, user_type, password_hash, is_active, created_at) VALUES
 (1, 'admin@example.com', 'System Administrator', 'admin', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8Kz8Kz8K', true, DATE_SUB(NOW(), INTERVAL 30 DAY)),
-(2, 'user1@example.com', 'John Doe', 'user', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8Kz8Kz8K', true, DATE_SUB(NOW(), INTERVAL 25 DAY)),
-(3, 'user2@example.com', 'Jane Smith', 'user', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8Kz8Kz8K', true, DATE_SUB(NOW(), INTERVAL 20 DAY));
+(2, 'user1@example.com', 'John Doe', 'View', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8Kz8Kz8K', true, DATE_SUB(NOW(), INTERVAL 25 DAY)),
+(3, 'user2@example.com', 'Jane Smith', 'Analyst', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/8Kz8Kz8K', true, DATE_SUB(NOW(), INTERVAL 20 DAY));
 
 -- ==============================================
 -- 2. DEVICE MODELS DATA
