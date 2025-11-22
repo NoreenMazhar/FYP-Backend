@@ -16,14 +16,13 @@ import {
 } from "../ui/dialog";
 import {
   Calendar,
-  Download,
   FileText,
   Mail,
-  Printer,
   Clock,
   Trash2,
   Eye,
   Loader2,
+  X,
 } from "lucide-react";
 import {
   Table,
@@ -44,6 +43,11 @@ import {
 import { Skeleton } from "../ui/skeleton";
 import { toast } from "sonner";
 import { useDataCache } from "../../contexts/DataCacheContext";
+import jsPDF from "jspdf";
+import { Download } from "lucide-react";
+import html2canvas from "html2canvas";
+import { VisualizationRenderer } from "./VisualizationRenderer";
+import ReactDOM from "react-dom/client";
 
 export function ReportsView() {
   const { getCachedData, setCachedData, refreshTrigger } = useDataCache();
@@ -55,13 +59,13 @@ export function ReportsView() {
   const [selectedReport, setSelectedReport] = useState<Report | null>(null);
   const [reportData, setReportData] = useState<any>(null);
   const [isViewDialogOpen, setIsViewDialogOpen] = useState(false);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [isEmailDialogOpen, setIsEmailDialogOpen] = useState(false);
   const [emailReportId, setEmailReportId] = useState<number | null>(null);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
   const [emailData, setEmailData] = useState({
     to_email: "",
-    cc: "",
-    bcc: "",
   });
 
   const [formData, setFormData] = useState({
@@ -103,6 +107,15 @@ export function ReportsView() {
     fetchReports(refreshTrigger > 0);
   }, [refreshTrigger, getCachedData, setCachedData]);
 
+  // Cleanup PDF blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (pdfBlobUrl) {
+        URL.revokeObjectURL(pdfBlobUrl);
+      }
+    };
+  }, [pdfBlobUrl]);
+
   // Initialize form data when dialog opens
   useEffect(() => {
     if (isDialogOpen) {
@@ -125,6 +138,21 @@ export function ReportsView() {
       });
     }
   }, [isDialogOpen]);
+
+  // Debug: Track emailReportId changes
+  useEffect(() => {
+    console.log("emailReportId changed:", emailReportId);
+  }, [emailReportId]);
+
+  // Debug: Track email dialog state
+  useEffect(() => {
+    console.log(
+      "isEmailDialogOpen changed:",
+      isEmailDialogOpen,
+      "emailReportId:",
+      emailReportId
+    );
+  }, [isEmailDialogOpen, emailReportId]);
 
   const handleGenerateReport = async () => {
     if (!formData.start_date || !formData.end_date) {
@@ -166,14 +194,396 @@ export function ReportsView() {
     }
   };
 
+  // Helper function to capture chart as image
+  const captureChartAsImage = async (
+    vizConfig: any,
+    title: string
+  ): Promise<string | null> => {
+    return new Promise((resolve) => {
+      // Create a temporary container
+      const tempContainer = document.createElement("div");
+      tempContainer.style.position = "fixed";
+      tempContainer.style.left = "-10000px";
+      tempContainer.style.top = "0";
+      tempContainer.style.width = "800px";
+      tempContainer.style.height = "400px";
+      tempContainer.style.backgroundColor = "#ffffff";
+      tempContainer.style.padding = "20px";
+      tempContainer.style.boxSizing = "border-box";
+      document.body.appendChild(tempContainer);
+
+      // Create a root and render the chart
+      const root = ReactDOM.createRoot(tempContainer);
+      root.render(
+        React.createElement(VisualizationRenderer, {
+          config: vizConfig,
+          title: title,
+          noCard: true,
+        })
+      );
+
+      // Wait for chart to render, then capture
+      // Use multiple timeouts to ensure chart is fully rendered
+      setTimeout(async () => {
+        try {
+          // Wait a bit more for SVG rendering
+          await new Promise((r) => setTimeout(r, 500));
+
+          const canvas = await html2canvas(tempContainer, {
+            backgroundColor: "#ffffff",
+            scale: 2,
+            logging: false,
+            useCORS: true,
+            allowTaint: true,
+          });
+          const imgData = canvas.toDataURL("image/png", 0.95);
+
+          // Cleanup
+          root.unmount();
+          setTimeout(() => {
+            if (tempContainer.parentNode) {
+              document.body.removeChild(tempContainer);
+            }
+          }, 100);
+
+          resolve(imgData);
+        } catch (error) {
+          console.error("Error capturing chart:", error);
+          try {
+            root.unmount();
+            if (tempContainer.parentNode) {
+              document.body.removeChild(tempContainer);
+            }
+          } catch (cleanupError) {
+            console.error("Error during cleanup:", cleanupError);
+          }
+          resolve(null);
+        }
+      }, 1500); // Wait 1.5 seconds for chart to render
+    });
+  };
+
+  const generatePDF = async (report: Report, data: any) => {
+    setIsGeneratingPdf(true);
+    try {
+      const pdf = new jsPDF("p", "mm", "a4");
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      let yPosition = 20;
+      const margin = 20;
+      const lineHeight = 7;
+      const maxWidth = pageWidth - 2 * margin;
+      const chartHeight = 60; // Height in mm for charts
+
+      // Helper function to add new page if needed
+      const checkNewPage = (requiredHeight: number) => {
+        if (yPosition + requiredHeight > pageHeight - margin) {
+          pdf.addPage();
+          yPosition = 20;
+          return true;
+        }
+        return false;
+      };
+
+      // Title
+      pdf.setFontSize(20);
+      pdf.setFont("helvetica", "bold");
+      pdf.text(report.title || `Report #${report.id}`, margin, yPosition);
+      yPosition += 10;
+
+      // Description
+      if (report.description) {
+        pdf.setFontSize(12);
+        pdf.setFont("helvetica", "normal");
+        const descLines = pdf.splitTextToSize(report.description, maxWidth);
+        descLines.forEach((line: string) => {
+          checkNewPage(lineHeight);
+          pdf.text(line, margin, yPosition);
+          yPosition += lineHeight;
+        });
+        yPosition += 5;
+      }
+
+      // Metadata
+      pdf.setFontSize(10);
+      pdf.setFont("helvetica", "italic");
+      pdf.text(`Created: ${formatDate(report.created_at)}`, margin, yPosition);
+      yPosition += lineHeight;
+
+      if (data.report_data?.start_date && data.report_data?.end_date) {
+        pdf.text(
+          `Period: ${formatDate(data.report_data.start_date)} - ${formatDate(
+            data.report_data.end_date
+          )}`,
+          margin,
+          yPosition
+        );
+        yPosition += lineHeight;
+      }
+
+      yPosition += 5;
+
+      // Summary Section
+      if (data.report_data?.summary) {
+        checkNewPage(15);
+        pdf.setFontSize(16);
+        pdf.setFont("helvetica", "bold");
+        pdf.text("Summary", margin, yPosition);
+        yPosition += 10;
+
+        pdf.setFontSize(11);
+        pdf.setFont("helvetica", "normal");
+
+        // Overview
+        if (data.report_data.summary.overview) {
+          const overviewLines = pdf.splitTextToSize(
+            data.report_data.summary.overview,
+            maxWidth
+          );
+          overviewLines.forEach((line: string) => {
+            checkNewPage(lineHeight);
+            pdf.text(line, margin, yPosition);
+            yPosition += lineHeight;
+          });
+          yPosition += 5;
+        }
+
+        // Key Metrics
+        if (data.report_data.summary.key_metrics) {
+          pdf.setFontSize(12);
+          pdf.setFont("helvetica", "bold");
+          pdf.text("Key Metrics:", margin, yPosition);
+          yPosition += 8;
+
+          pdf.setFontSize(10);
+          pdf.setFont("helvetica", "normal");
+          Object.entries(data.report_data.summary.key_metrics).forEach(
+            ([key, value]) => {
+              checkNewPage(lineHeight);
+              const label = key
+                .replace(/_/g, " ")
+                .replace(/\b\w/g, (l: string) => l.toUpperCase());
+              const val =
+                typeof value === "number"
+                  ? value.toLocaleString()
+                  : String(value);
+              pdf.text(`${label}: ${val}`, margin + 5, yPosition);
+              yPosition += lineHeight;
+            }
+          );
+          yPosition += 5;
+        }
+
+        // System Health
+        if (data.report_data.summary.system_health) {
+          pdf.setFontSize(12);
+          pdf.setFont("helvetica", "bold");
+          pdf.text("System Health:", margin, yPosition);
+          yPosition += 8;
+
+          pdf.setFontSize(10);
+          pdf.setFont("helvetica", "normal");
+          Object.entries(data.report_data.summary.system_health).forEach(
+            ([key, value]) => {
+              checkNewPage(lineHeight);
+              const label = key
+                .replace(/_/g, " ")
+                .replace(/\b\w/g, (l: string) => l.toUpperCase());
+              pdf.text(`${label}: ${String(value)}`, margin + 5, yPosition);
+              yPosition += lineHeight;
+            }
+          );
+          yPosition += 5;
+        }
+
+        // Recommendations
+        if (
+          data.report_data.summary.recommendations &&
+          data.report_data.summary.recommendations.length > 0
+        ) {
+          pdf.setFontSize(12);
+          pdf.setFont("helvetica", "bold");
+          pdf.text("Recommendations:", margin, yPosition);
+          yPosition += 8;
+
+          pdf.setFontSize(10);
+          pdf.setFont("helvetica", "normal");
+          data.report_data.summary.recommendations.forEach((rec: string) => {
+            checkNewPage(lineHeight);
+            pdf.text(`• ${rec}`, margin + 5, yPosition);
+            yPosition += lineHeight;
+          });
+        }
+      }
+
+      // Sections
+      if (data.report_data?.sections) {
+        for (const section of data.report_data.sections) {
+          checkNewPage(20);
+          yPosition += 5;
+
+          // Section Title
+          pdf.setFontSize(14);
+          pdf.setFont("helvetica", "bold");
+          pdf.text(section.title, margin, yPosition);
+          yPosition += 8;
+
+          // Section Description
+          if (section.description) {
+            pdf.setFontSize(10);
+            pdf.setFont("helvetica", "normal");
+            const descLines = pdf.splitTextToSize(
+              section.description,
+              maxWidth
+            );
+            descLines.forEach((line: string) => {
+              checkNewPage(lineHeight);
+              pdf.text(line, margin, yPosition);
+              yPosition += lineHeight;
+            });
+            yPosition += 5;
+          }
+
+          // Insights
+          if (section.insights && section.insights.length > 0) {
+            pdf.setFontSize(11);
+            pdf.setFont("helvetica", "bold");
+            pdf.text("Key Insights:", margin, yPosition);
+            yPosition += 7;
+
+            pdf.setFontSize(9);
+            pdf.setFont("helvetica", "normal");
+            section.insights.forEach((insight: string) => {
+              checkNewPage(lineHeight);
+              pdf.text(`• ${insight}`, margin + 5, yPosition);
+              yPosition += lineHeight;
+            });
+            yPosition += 5;
+          }
+
+          // Visualization Chart
+          if (section.visualization?.Data) {
+            const vizData = section.visualization.Data;
+            if (vizData.X && vizData.Y && vizData.X.length > 0) {
+              // Transform visualization data
+              const vizConfig = {
+                x: vizData.X || [],
+                y: vizData.Y || [],
+                plot_type:
+                  section.visualization?.["Plot-type"]?.toLowerCase() || "bar",
+                x_axis_label: section.visualization?.["X-axis-label"],
+                y_axis_label: section.visualization?.["Y-axis-label"],
+                description:
+                  section.visualization?.Description || section.description,
+              };
+
+              const chartTitle =
+                section.visualization?.Description || section.title || "Chart";
+
+              // Add chart title
+              pdf.setFontSize(11);
+              pdf.setFont("helvetica", "bold");
+              pdf.text(chartTitle, margin, yPosition);
+              yPosition += 7;
+
+              // Capture chart as image
+              try {
+                const chartImage = await captureChartAsImage(
+                  vizConfig,
+                  chartTitle
+                );
+
+                if (chartImage) {
+                  checkNewPage(chartHeight);
+                  // Add image to PDF (scaled to fit page width)
+                  const imgWidth = pageWidth - 2 * margin;
+                  pdf.addImage(
+                    chartImage,
+                    "PNG",
+                    margin,
+                    yPosition,
+                    imgWidth,
+                    chartHeight
+                  );
+                  yPosition += chartHeight + 5;
+                } else {
+                  // Fallback to text if image capture fails
+                  pdf.setFontSize(8);
+                  pdf.setFont("helvetica", "normal");
+                  pdf.text(
+                    `Data points: ${vizData.X.length}`,
+                    margin + 5,
+                    yPosition
+                  );
+                  yPosition += lineHeight;
+
+                  if (vizData.Y.length > 0) {
+                    const maxY = Math.max(
+                      ...vizData.Y.map((y: any) => Number(y))
+                    );
+                    const minY = Math.min(
+                      ...vizData.Y.map((y: any) => Number(y))
+                    );
+                    pdf.text(
+                      `Range: ${minY.toLocaleString()} - ${maxY.toLocaleString()}`,
+                      margin + 5,
+                      yPosition
+                    );
+                    yPosition += lineHeight;
+                  }
+                }
+              } catch (error) {
+                console.error("Error adding chart to PDF:", error);
+                // Fallback to text
+                pdf.setFontSize(8);
+                pdf.setFont("helvetica", "normal");
+                pdf.text(
+                  `Data points: ${vizData.X.length}`,
+                  margin + 5,
+                  yPosition
+                );
+                yPosition += lineHeight;
+              }
+            }
+          }
+        }
+      }
+
+      // Generate blob URL
+      const pdfBlob = pdf.output("blob");
+      const url = URL.createObjectURL(pdfBlob);
+      setPdfBlobUrl(url);
+    } catch (error: any) {
+      console.error("Error generating PDF:", error);
+      toast.error("Failed to generate PDF");
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
   const handleViewReport = async (reportId: number) => {
     try {
       const details = await getReportDetails(reportId);
       setSelectedReport(details.report);
       setReportData(details);
       setIsViewDialogOpen(true);
+      // Generate PDF when dialog opens
+      await generatePDF(details.report, details);
     } catch (err: any) {
       toast.error(err.message || "Failed to load report details");
+    }
+  };
+
+  const handleDownloadPDF = () => {
+    if (pdfBlobUrl && selectedReport) {
+      const link = document.createElement("a");
+      link.href = pdfBlobUrl;
+      link.download = `${
+        selectedReport.title || `Report_${selectedReport.id}`
+      }.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
     }
   };
 
@@ -189,17 +599,41 @@ export function ReportsView() {
   };
 
   const handleSendEmail = (reportId: number) => {
+    console.log("handleSendEmail called with reportId:", reportId);
     setEmailReportId(reportId);
     setEmailData({
       to_email: "",
-      cc: "",
-      bcc: "",
     });
     setIsEmailDialogOpen(true);
+    console.log("Email dialog opened, emailReportId should be:", reportId);
   };
 
-  const handleSendEmailSubmit = async () => {
-    if (!emailData.to_email.trim()) {
+  const handleSendEmailSubmit = async (e?: React.MouseEvent) => {
+    console.log("=== handleSendEmailSubmit START ===");
+    console.log("Event object:", e);
+    e?.preventDefault();
+    e?.stopPropagation();
+
+    console.log("handleSendEmailSubmit called", {
+      emailData,
+      emailReportId,
+      to_email: emailData.to_email,
+      to_email_trimmed: emailData.to_email.trim(),
+      hasEmail: !!emailData.to_email.trim(),
+    });
+
+    // Early return check with logging
+    if (!emailReportId) {
+      console.error("ERROR: emailReportId is null/undefined!", {
+        emailReportId,
+        emailData,
+      });
+      toast.error("Report ID is missing. Please try again.");
+      return;
+    }
+
+    if (!emailData.to_email || !emailData.to_email.trim()) {
+      console.log("Validation failed: No email address");
       toast.error("Please enter at least one recipient email address");
       return;
     }
@@ -218,71 +652,41 @@ export function ReportsView() {
       }
     }
 
-    // Validate CC emails if provided
-    let ccEmails: string[] = [];
-    if (emailData.cc.trim()) {
-      ccEmails = emailData.cc
-        .split(",")
-        .map((e) => e.trim())
-        .filter((e) => e);
-      for (const email of ccEmails) {
-        if (!emailRegex.test(email)) {
-          toast.error(`Invalid CC email address: ${email}`);
-          return;
-        }
-      }
-    }
-
-    // Validate BCC emails if provided
-    let bccEmails: string[] = [];
-    if (emailData.bcc.trim()) {
-      bccEmails = emailData.bcc
-        .split(",")
-        .map((e) => e.trim())
-        .filter((e) => e);
-      for (const email of bccEmails) {
-        if (!emailRegex.test(email)) {
-          toast.error(`Invalid BCC email address: ${email}`);
-          return;
-        }
-      }
-    }
-
+    // This check is now above, but keeping for safety
     if (!emailReportId) {
+      console.error("Validation failed: No report ID", emailReportId);
       toast.error("Report ID is missing");
       return;
     }
 
+    console.log("All validations passed, proceeding to send email...");
+
     try {
       setIsSendingEmail(true);
+      console.log("Sending email with data:", { toEmails, emailReportId });
 
       // Send email to each recipient in "To" field (each gets it as primary recipient)
-      const sendPromises = toEmails.map((toEmail) =>
-        sendReportEmail({
+      const sendPromises = toEmails.map((toEmail) => {
+        console.log("Sending email to:", toEmail);
+        return sendReportEmail({
           to_email: toEmail,
           report_id: emailReportId,
-          cc: ccEmails.length > 0 ? ccEmails : undefined,
-          bcc: bccEmails.length > 0 ? bccEmails : undefined,
-        })
-      );
+        });
+      });
 
       const results = await Promise.all(sendPromises);
       const successCount = results.length;
+      console.log("Email sent successfully:", results);
 
-      toast.success(
-        `Report sent successfully to ${successCount} recipient(s)${
-          ccEmails.length > 0 ? ` (CC: ${ccEmails.length})` : ""
-        }${bccEmails.length > 0 ? ` (BCC: ${bccEmails.length})` : ""}`
-      );
+      toast.success(`Report sent successfully to ${successCount} recipient(s)`);
 
       setIsEmailDialogOpen(false);
       setEmailData({
         to_email: "",
-        cc: "",
-        bcc: "",
       });
       setEmailReportId(null);
     } catch (err: any) {
+      console.error("Error sending email:", err);
       toast.error(err.message || "Failed to send report email");
     } finally {
       setIsSendingEmail(false);
@@ -315,7 +719,7 @@ export function ReportsView() {
 
   return (
     <div className="space-y-6 relative">
-      {/* Loading Overlay */}
+      {/* Loading Overlay for Report Generation */}
       {isGenerating && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center">
           <Card className="p-8 border-border/40 bg-card/90 backdrop-blur-sm shadow-lg max-w-md w-full mx-4">
@@ -347,6 +751,38 @@ export function ReportsView() {
         </div>
       )}
 
+      {/* Loading Overlay for Email Sending */}
+      {isSendingEmail && (
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center">
+          <Card className="p-8 border-border/40 bg-card/90 backdrop-blur-sm shadow-lg max-w-md w-full mx-4">
+            <div className="flex flex-col items-center justify-center space-y-4">
+              <Loader2 className="w-12 h-12 text-primary animate-spin" />
+              <div className="text-center space-y-2">
+                <h3 className="text-lg font-semibold">Sending Email</h3>
+                <p className="text-sm text-muted-foreground">
+                  Please wait while we send the report via email. This may take
+                  a few moments...
+                </p>
+                <div className="flex items-center justify-center gap-2 mt-4">
+                  <div
+                    className="w-2 h-2 bg-primary rounded-full animate-bounce"
+                    style={{ animationDelay: "0ms" }}
+                  ></div>
+                  <div
+                    className="w-2 h-2 bg-primary rounded-full animate-bounce"
+                    style={{ animationDelay: "150ms" }}
+                  ></div>
+                  <div
+                    className="w-2 h-2 bg-primary rounded-full animate-bounce"
+                    style={{ animationDelay: "300ms" }}
+                  ></div>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -355,8 +791,8 @@ export function ReportsView() {
             Generate and download comprehensive traffic reports
           </p>
         </div>
-        <Dialog 
-          open={isDialogOpen} 
+        <Dialog
+          open={isDialogOpen}
           onOpenChange={(open) => {
             setIsDialogOpen(open);
             if (!open) {
@@ -383,7 +819,8 @@ export function ReportsView() {
             <DialogHeader>
               <DialogTitle>Generate New Report</DialogTitle>
               <DialogDescription>
-                Fill in the details below to generate a comprehensive traffic report.
+                Fill in the details below to generate a comprehensive traffic
+                report.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 mt-4">
@@ -631,51 +1068,123 @@ export function ReportsView() {
       <Dialog
         open={isViewDialogOpen}
         onOpenChange={(open: any) => {
-          setIsViewDialogOpen(open);
-          if (!open) {
+          // This handler is kept for compatibility but won't be called
+          // due to preventAutoClose prop
+          if (open === false) {
+            setIsViewDialogOpen(false);
             setSelectedReport(null);
             setReportData(null);
+            if (pdfBlobUrl) {
+              URL.revokeObjectURL(pdfBlobUrl);
+              setPdfBlobUrl(null);
+            }
           }
         }}
+        preventAutoClose={true}
       >
-        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto z-[100]">
-          {selectedReport ? (
+        <DialogContent
+          className="!w-[98vw] !max-w-[98vw] sm:!max-w-[98vw] md:!max-w-[98vw] lg:!max-w-[98vw] !h-[95vh] !max-h-[95vh] z-[100] !p-0 flex flex-col [&>button]:hidden"
+          onInteractOutside={(e) => {
+            // Prevent closing on outside clicks - user must use close button
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onKeyDown={(e) => {
+            // Prevent Escape key from closing the dialog
+            if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+            }
+          }}
+        >
+          {selectedReport && reportData ? (
             <>
-              <DialogHeader>
-                <DialogTitle>
-                  {selectedReport.title || `Report #${selectedReport.id}`}
-                </DialogTitle>
-                <DialogDescription>
-                  View detailed information and data for this report.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="mt-4 space-y-4">
-                {selectedReport.description && (
-                  <p className="text-muted-foreground">
-                    {selectedReport.description}
-                  </p>
-                )}
-                <div className="text-sm text-muted-foreground">
-                  Created: {formatDate(selectedReport.created_at)}
+              <DialogHeader className="flex-shrink-0 px-6 pt-6 pb-4 border-b border-border/40 flex flex-row items-center justify-between relative z-50 bg-background">
+                <div className="flex-1">
+                  <DialogTitle className="text-2xl">
+                    {selectedReport.title || `Report #${selectedReport.id}`}
+                  </DialogTitle>
+                  <DialogDescription className="text-base mt-2">
+                    {selectedReport.description ||
+                      "View detailed information and data for this report."}
+                  </DialogDescription>
                 </div>
-                {reportData?.report_data && (
-                  <div className="mt-4">
-                    <h4 className="font-semibold mb-2">Report Data</h4>
-                    <pre className="bg-muted p-4 rounded-lg overflow-auto text-xs">
-                      {JSON.stringify(reportData.report_data, null, 2)}
-                    </pre>
+                <div
+                  className="flex items-center gap-2 ml-4 relative z-[60]"
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  {pdfBlobUrl && (
+                    <Button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log("Download button clicked");
+                        handleDownloadPDF();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      variant="outline"
+                      size="sm"
+                      className="relative z-[70] pointer-events-auto cursor-pointer"
+                      style={{ pointerEvents: "auto", zIndex: 70 }}
+                    >
+                      <Download className="w-4 h-4 mr-2" />
+                      Download PDF
+                    </Button>
+                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      console.log("Close button clicked");
+                      // Explicitly close the dialog and clean up
+                      setIsViewDialogOpen(false);
+                      setSelectedReport(null);
+                      setReportData(null);
+                      // Clean up PDF blob URL
+                      if (pdfBlobUrl) {
+                        URL.revokeObjectURL(pdfBlobUrl);
+                        setPdfBlobUrl(null);
+                      }
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                    }}
+                    className="h-8 w-8 relative z-[70] pointer-events-auto cursor-pointer"
+                    style={{ pointerEvents: "auto", zIndex: 70 }}
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              </DialogHeader>
+              <div className="flex-1 overflow-hidden">
+                {isGeneratingPdf ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center">
+                      <Loader2 className="w-8 h-8 animate-spin mx-auto mb-4" />
+                      <p className="text-muted-foreground">Generating PDF...</p>
+                    </div>
+                  </div>
+                ) : pdfBlobUrl ? (
+                  <iframe
+                    src={pdfBlobUrl}
+                    className="w-full h-full border-0"
+                    title="Report PDF"
+                    style={{ pointerEvents: "auto" }}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-muted-foreground">Loading PDF...</p>
                   </div>
                 )}
-                {reportData?.visualizations &&
-                  reportData.visualizations.length > 0 && (
-                    <div className="mt-4">
-                      <h4 className="font-semibold mb-2">Visualizations</h4>
-                      <p className="text-sm text-muted-foreground">
-                        This report includes {reportData.visualizations.length}{" "}
-                        visualization(s)
-                      </p>
-                    </div>
-                  )}
               </div>
             </>
           ) : (
@@ -693,12 +1202,20 @@ export function ReportsView() {
         onOpenChange={(open: any) => {
           setIsEmailDialogOpen(open);
           if (!open) {
-            setEmailData({ to_email: "", cc: "", bcc: "" });
+            setEmailData({ to_email: "" });
             setEmailReportId(null);
           }
         }}
       >
-        <DialogContent className="max-w-md z-[100]">
+        <DialogContent
+          className="!max-w-sm z-[100]"
+          onInteractOutside={(e) => {
+            // Prevent closing on outside clicks when sending email
+            if (isSendingEmail) {
+              e.preventDefault();
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Mail className="w-5 h-5" />
@@ -717,52 +1234,52 @@ export function ReportsView() {
                 id="to_email"
                 type="text"
                 value={emailData.to_email}
-                onChange={(e) =>
-                  setEmailData({ ...emailData, to_email: e.target.value })
-                }
+                onChange={(e) => setEmailData({ to_email: e.target.value })}
+                onKeyDown={(e) => {
+                  e.stopPropagation();
+                  // Handle Enter key to submit
+                  if (
+                    e.key === "Enter" &&
+                    !isSendingEmail &&
+                    emailData.to_email.trim()
+                  ) {
+                    e.preventDefault();
+                    console.log("Enter key pressed, triggering submit");
+                    handleSendEmailSubmit();
+                  }
+                }}
+                onClick={(e) => e.stopPropagation()}
                 placeholder="email@example.com, another@example.com"
                 disabled={isSendingEmail}
+                autoFocus
               />
               <p className="text-xs text-muted-foreground mt-1">
                 Enter email addresses separated by commas for multiple
                 recipients
               </p>
             </div>
-            <div>
-              <Label htmlFor="cc">CC (Optional)</Label>
-              <Input
-                id="cc"
-                type="text"
-                value={emailData.cc}
-                onChange={(e) =>
-                  setEmailData({ ...emailData, cc: e.target.value })
-                }
-                placeholder="cc@example.com, cc2@example.com"
-                disabled={isSendingEmail}
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Carbon copy recipients (comma-separated)
-              </p>
-            </div>
-            <div>
-              <Label htmlFor="bcc">BCC (Optional)</Label>
-              <Input
-                id="bcc"
-                type="text"
-                value={emailData.bcc}
-                onChange={(e) =>
-                  setEmailData({ ...emailData, bcc: e.target.value })
-                }
-                placeholder="bcc@example.com, bcc2@example.com"
-                disabled={isSendingEmail}
-              />
-              <p className="text-xs text-muted-foreground mt-1">
-                Blind carbon copy recipients (comma-separated)
-              </p>
-            </div>
             <div className="flex gap-2 pt-2">
               <Button
-                onClick={handleSendEmailSubmit}
+                type="button"
+                onClick={(e) => {
+                  console.log("=== Send Email button clicked! ===", {
+                    emailData,
+                    emailReportId,
+                    isSendingEmail,
+                    isDisabled: isSendingEmail || !emailData.to_email.trim(),
+                    eventType: e.type,
+                    currentTarget: e.currentTarget,
+                  });
+                  e.preventDefault();
+                  e.stopPropagation();
+                  console.log("About to call handleSendEmailSubmit...");
+                  handleSendEmailSubmit(e);
+                  console.log("handleSendEmailSubmit call completed (async)");
+                }}
+                onMouseDown={(e) => {
+                  // Don't prevent default on mousedown, just stop propagation
+                  e.stopPropagation();
+                }}
                 disabled={isSendingEmail || !emailData.to_email.trim()}
                 className="flex-1"
               >
@@ -782,7 +1299,7 @@ export function ReportsView() {
                 variant="outline"
                 onClick={() => {
                   setIsEmailDialogOpen(false);
-                  setEmailData({ to_email: "", cc: "", bcc: "" });
+                  setEmailData({ to_email: "" });
                   setEmailReportId(null);
                 }}
                 disabled={isSendingEmail}

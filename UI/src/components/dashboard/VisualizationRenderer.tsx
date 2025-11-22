@@ -41,18 +41,27 @@ interface VisualizationRendererProps {
   config: VisualizationConfig | string;
   title: string;
   isLoading?: boolean;
+  noCard?: boolean;
 }
 
 export const VisualizationRenderer: React.FC<VisualizationRendererProps> = ({
   config,
   title,
   isLoading = false,
+  noCard = false,
 }) => {
   if (isLoading) {
-    return (
-      <Card className="p-6 border-border/40 bg-card/60 backdrop-blur-sm">
+    const LoadingContent = (
+      <>
         <Skeleton className="h-8 w-64 mb-4" />
         <Skeleton className="h-[350px] w-full" />
+      </>
+    );
+    return noCard ? (
+      <div>{LoadingContent}</div>
+    ) : (
+      <Card className="p-6 border-border/40 bg-card/60 backdrop-blur-sm">
+        {LoadingContent}
       </Card>
     );
   }
@@ -63,12 +72,17 @@ export const VisualizationRenderer: React.FC<VisualizationRendererProps> = ({
     parsedConfig =
       typeof config === "string" ? JSON.parse(config) : config;
   } catch (e) {
-    return (
+    const ErrorContent = (
+      <div className="mb-4">
+        <h3>{title}</h3>
+        <p className="text-muted-foreground">Invalid visualization data</p>
+      </div>
+    );
+    return noCard ? (
+      <div>{ErrorContent}</div>
+    ) : (
       <Card className="p-6 border-border/40 bg-card/60 backdrop-blur-sm">
-        <div className="mb-4">
-          <h3>{title}</h3>
-          <p className="text-muted-foreground">Invalid visualization data</p>
-        </div>
+        {ErrorContent}
       </Card>
     );
   }
@@ -77,12 +91,17 @@ export const VisualizationRenderer: React.FC<VisualizationRendererProps> = ({
     parsedConfig;
 
   if (!x || !y || x.length === 0 || y.length === 0) {
-    return (
+    const NoDataContent = (
+      <div className="mb-4">
+        <h3>{title}</h3>
+        <p className="text-muted-foreground">No data available</p>
+      </div>
+    );
+    return noCard ? (
+      <div>{NoDataContent}</div>
+    ) : (
       <Card className="p-6 border-border/40 bg-card/60 backdrop-blur-sm">
-        <div className="mb-4">
-          <h3>{title}</h3>
-          <p className="text-muted-foreground">No data available</p>
-        </div>
+        {NoDataContent}
       </Card>
     );
   }
@@ -253,15 +272,23 @@ export const VisualizationRenderer: React.FC<VisualizationRendererProps> = ({
     }
   };
 
-  return (
-    <Card className="p-6 border-border/40 bg-card/60 backdrop-blur-sm">
+  const ChartContent = (
+    <>
       <div className="mb-4">
-        <h3>{title}</h3>
-        <p className="text-muted-foreground">
+        <h3 className="text-lg font-semibold">{title}</h3>
+        <p className="text-muted-foreground text-sm mt-1">
           {description || `${x_axis_label || "X"} vs ${y_axis_label || "Y"}`}
         </p>
       </div>
       {renderChart()}
+    </>
+  );
+
+  return noCard ? (
+    <div>{ChartContent}</div>
+  ) : (
+    <Card className="p-6 border-border/40 bg-card/60 backdrop-blur-sm">
+      {ChartContent}
     </Card>
   );
 };

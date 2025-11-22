@@ -43,9 +43,25 @@ async function apiRequest<T>(
     (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${BASE_URL}${endpoint}`, {
+  const url = `${BASE_URL}${endpoint}`;
+  console.log("apiRequest called:", {
+    method: options.method || "GET",
+    url,
+    endpoint,
+    hasBody: !!options.body,
+    body: options.body,
+  });
+
+  const response = await fetch(url, {
     ...options,
     headers,
+  });
+  
+  console.log("apiRequest response:", {
+    status: response.status,
+    statusText: response.statusText,
+    ok: response.ok,
+    url: response.url,
   });
 
   if (!response.ok) {
@@ -620,7 +636,9 @@ export async function sendReportEmail(data: {
   report_title: string;
   subject: string;
 }> {
-  return apiRequest<{
+  console.log("sendReportEmail API call - endpoint: /email/send-report", data);
+  console.log("BASE_URL:", BASE_URL);
+  const result = await apiRequest<{
     message: string;
     to: string;
     report_id?: number;
@@ -630,6 +648,8 @@ export async function sendReportEmail(data: {
     method: "POST",
     body: JSON.stringify(data),
   });
+  console.log("sendReportEmail API response:", result);
+  return result;
 }
 
 export async function sendBulkEmail(data: {
